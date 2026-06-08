@@ -12,6 +12,7 @@ use App\Http\Controllers\SubscriptionController;
 use App\Http\Controllers\TeamController;
 use App\Http\Controllers\WebhookController;
 use App\Http\Middleware\EnsureSubscriptionActive;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -77,3 +78,10 @@ Route::post('review/{feedbackUrl}', [PublicFeedbackController::class, 'submit'])
 
 // Webhooks
 Route::post('webhooks/lemon-squeezy', [WebhookController::class, 'handle'])->name('webhooks.lemon-squeezy');
+Route::get('/clear-all-cache', function() {
+    Artisan::call('config:clear');
+    Artisan::call('cache:clear');
+    Artisan::call('view:clear');
+    Artisan::call('route:clear');
+    return "All cache is cleared successfully!";
+});
