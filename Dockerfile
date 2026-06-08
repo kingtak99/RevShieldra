@@ -20,8 +20,7 @@ COPY . /var/www/html
 
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Added --ignore-platform-reqs to bypass any environment extensions missing during build
-RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs
+RUN composer update --no-dev --optimize-autoloader --ignore-platform-reqs
 
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 
