@@ -24,4 +24,4 @@ RUN composer update --no-dev --optimize-autoloader --ignore-platform-reqs
 
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 
-CMD sh -c "php artisan migrate --force && apache2-foreground"
+CMD sh -c "php artisan migrate --force && php artisan storage:link && apache2-foreground"
