@@ -78,10 +78,30 @@ Route::post('review/{feedbackUrl}', [PublicFeedbackController::class, 'submit'])
 
 // Webhooks
 Route::post('webhooks/lemon-squeezy', [WebhookController::class, 'handle'])->name('webhooks.lemon-squeezy');
-Route::get('/clear-all-cache', function() {
+
+Route::get('/clear-all-cache', function () {
     Artisan::call('config:clear');
     Artisan::call('cache:clear');
     Artisan::call('view:clear');
     Artisan::call('route:clear');
     return "All cache is cleared successfully!";
+});
+
+// تشغيل أمر التعلم التلقائي للـ Chatbot يدوياً
+Route::get('/run-chatbot-learning', function () {
+    try {
+        // قمنا باستدعائه بناءً على الـ Signature الخاص بالأمر
+        Artisan::call('chatbot:auto-learn');
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Chatbot auto-learning executed successfully!',
+            'output' => Artisan::output()
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Failed to execute command: ' . $e->getMessage()
+        ], 500);
+    }
 });
