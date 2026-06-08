@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Chatbot Test</title>
+</head>
+<body>
+    <h1>Chatbot Smart Detection Test</h1>
+    
+    <div id="result"></div>
+
+    <script>
+        async function testChatbot() {
+            const response = await fetch('/api/chatbot/process', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+                },
+                body: JSON.stringify({
+                    session_id: 'test_' + Date.now(),
+                    action: 'chat',
+                    language: 'ar',
+                    message: 'كم السعر؟'
+                })
+            });
+
+            const data = await response.json();
+            document.getElementById('result').innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+        }
+
+        // Run test
+        testChatbot();
+    </script>
+</body>
+</html>
