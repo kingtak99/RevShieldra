@@ -29,5 +29,5 @@ RUN composer install --no-dev --optimize-autoloader
 # إعطاء الصلاحيات المناسبة لمجلدات الـ Storage والـ Cache
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 
-# تنفيذ الـ migration تلقائياً ثم تشغيل سيرفر Apache
-CMD php artisan migrate --force && apache2-foreground
+# تنفيذ الـ migration تلقائياً ثم تشغيل سيرفر Apache بالصيغة الصحيحة
+CMD sh -c "php artisan migrate --force && apache2-foreground"
