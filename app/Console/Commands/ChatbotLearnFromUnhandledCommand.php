@@ -10,35 +10,27 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
-class ChatbotLearnFromUnhandledCommand extends Command
+class ChatbotAutoLearnCommand extends Command
 {
-    protected $signature = 'chatbot:learn-from-unhandled {--limit=25 : Maximum pending queries per language (25 for quota optimization)}';
+    protected $signature = 'chatbot:auto-learn {--limit=50 : Maximum pending queries per language}';
 
-    protected $description = 'Learn from unhandled user queries and map them to existing flows using Gemini.';
+    protected $description = 'Map unhandled chatbot queries to existing flows using Gemini and save learned keywords.';
 
     public function handle(): int
     {
         $apiKey = config('services.gemini.key');
-        $model = config('services.gemini.model', env('GEMINI_MODEL', 'gemini-flash-latest'));
+        $model = config('services.gemini.model', 'gemini-flash-latest');
 
-        if (!$apiKey) {
+        if (! $apiKey) {
             $this->warn('GEMINI_API_KEY is not configured.');
+
             return self::FAILURE;
         }
 
         $totalLearned = 0;
-        $learnedDetails = [];
         $limit = (int) $this->option('limit');
 
         foreach (['ar', 'en'] as $language) {
-            $this->info("========================================");
-            $this->info("Processing [{$language}] Language");
-            $this->info("========================================");
-
-            // جلب خريطة التدفقات الحالية
-            $flowMap = $this->buildFlowMap($language);
-
-            // جلب الاستفسارات المعلقة من المستخدمين
             $pending = ChatbotUnhandledQuery::query()
                 ->where('language', $language)
                 ->where('status', 'pending')
@@ -48,134 +40,113 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 ->get();
 
             if ($pending->isEmpty()) {
-                $this->info("No pending {$language} queries to process.");
+                $this->info("No pending {$language} queries.");
                 continue;
             }
 
-            $this->info("Processing " . $pending->count() . " pending unhandled queries...");
-            $queriesToProcess = $pending->take(25)->pluck('query')->all();
-            $prompt = $this->buildPrompt($language, $flowMap, $queriesToProcess);
+            $flowMap = $this->buildFlowMap($language);
+            $prompt = $this->buildPrompt($language, $flowMap, $pending->pluck('query')->all());
 
             try {
-                $response = $this->executeGeminiRequest($prompt, $model, 15, [
-                    'temperature' => 0.1,
-                    'maxOutputTokens' => 1200,
-                ]);
-
-                if (!$response) {
-                    $this->warn("⚠️  Gemini API not responding. Check storage/logs/laravel.log for details.");
-                    Log::warning("Gemini request returned null for pending {$language} queries");
-                } elseif ($response->successful()) {
-                    $results = $this->extractLearningResults($response->json());
-                    if ($results !== null) {
-                        $pendingByQuery = $pending->keyBy(fn($pendingQuery) => $this->normalize($pendingQuery->getAttribute('query'), $language));
-                        $processedIds = [];
-
-                        foreach ($results as $item) {
-                            $keyword = trim((string) ($item['keyword'] ?? ''));
-                            $matchedFlow = trim((string) ($item['matched_flow'] ?? 'none'));
-                            $matchedBranch = trim((string) ($item['matched_branch'] ?? ''));
-                            $confidence = isset($item['confidence']) ? (float) $item['confidence'] : null;
-                            $generatedResponse = isset($item['generated_response']) ? trim((string) $item['generated_response']) : null;
-
-                            if ($keyword === '') {
-                                continue;
-                            }
-
-                            $normalized = $this->normalize($keyword, $language);
-                            $unhandled = $pendingByQuery->get($normalized);
-                            if ($unhandled) {
-                                $processedIds[] = $unhandled->id;
-                            }
-
-                            if ($matchedFlow === 'none') {
-                                continue;
-                            }
-
-                            if ($matchedFlow !== 'chitchat' && !$this->isValidTarget($flowMap, $matchedFlow, $matchedBranch !== '' ? $matchedBranch : null)) {
-                                continue;
-                            }
-
-                            $summary = $this->persistLearnedKeyword(
-                                $language,
-                                $normalized,
-                                $keyword,
-                                $matchedFlow,
-                                $matchedBranch !== '' ? $matchedBranch : null,
-                                $matchedFlow === 'chitchat' ? $generatedResponse : null,
-                                'user_error',
-                                $confidence
-                            );
-
-                            if ($summary !== null) {
-                                $learnedDetails[] = $summary;
-                                $totalLearned++;
-                            }
-                        }
-
-                        if ($processedIds !== []) {
-                            ChatbotUnhandledQuery::query()
-                                ->whereIn('id', array_unique($processedIds))
-                                ->update([
-                                    'status' => 'processed',
-                                    'processed_at' => now(),
-                                ]);
-
-                            $this->info("Updated " . count(array_unique($processedIds)) . " queries to 'processed' status.");
-                        }
-                    } else {
-                        Log::warning("Gemini pending-query extraction returned no parseable results for {$language}", [
-                            'body' => $response->body(),
-                        ]);
-                        $this->warn("Gemini returned unparseable results.");
-                    }
-                } else {
-                    $errorBody = $response ? $response->body() : 'no response';
-                    Log::warning("Gemini failed for pending {$language} queries", ['body' => $errorBody]);
-
-                    if (str_contains($errorBody, 'exceeded your current quota')) {
-                        $this->error("❌ Gemini API Quota Exceeded!");
-                        $this->error("Your API plan has reached its limit. Please:");
-                        $this->error("1. Check your Google Cloud Console quota usage");
-                        $this->error("2. Upgrade your API plan if needed");
-                        $this->error("3. Contact Google Cloud support");
-
-                        // Fallback: Map unhandled queries using local keyword matching
-                        $this->info("Using fallback keyword matching (offline mode)...");
-                        foreach ($pending as $unhandledQuery) {
-                            $normalized = $this->normalize($unhandledQuery->getAttribute('query'), $language);
-                            // محاولة مطابقة عامة - إذا كان يحتوي على كلمات الاحتيال
-                            $fraudKeywords = $language === 'ar' ? ['احتيال', 'مشبوهة', 'غير عادي'] : ['fraud', 'suspicious', 'unusual'];
-                            $isRelated = false;
-                            foreach ($fraudKeywords as $fk) {
-                                if (str_contains(mb_strtolower($normalized), mb_strtolower($fk))) {
-                                    $isRelated = true;
-                                    break;
-                                }
-                            }
-                            if ($isRelated) {
-                                $processedIds[] = $unhandledQuery->id;
-                            }
-                        }
-                        $this->info("Marked " . count($processedIds) . " queries as processed (offline fallback).");
-                    } elseif (str_contains($errorBody, 'high demand')) {
-                        $this->warn("⚠️  Gemini API High Demand: Service temporarily unavailable");
-                        $this->warn("Please try again later.");
-                    } else {
-                        $this->warn("Gemini API failed: " . mb_substr($errorBody, 0, 200));
-                    }
-                }
+                $response = Http::timeout(30)
+                    ->withHeaders(['Content-Type' => 'application/json'])
+                    ->post("https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}", [
+                        'contents' => [
+                            [
+                                'parts' => [
+                                    ['text' => $prompt],
+                                ],
+                            ],
+                        ],
+                        'generationConfig' => [
+                            'temperature' => 0.1,
+                            'maxOutputTokens' => 1600,
+                            'responseMimeType' => 'application/json',
+                        ],
+                    ]);
             } catch (\Throwable $exception) {
-                Log::error("Failed to run Gemini on pending {$language} queries: " . $exception->getMessage());
-                $this->error("Error: " . $exception->getMessage());
+                Log::warning('Chatbot auto learn Gemini request failed: ' . $exception->getMessage());
+                $this->error("Gemini request failed for {$language}: {$exception->getMessage()}");
+
+                continue;
             }
+
+            if (! $response->successful()) {
+                Log::warning('Chatbot auto learn Gemini response failed', [
+                    'language' => $language,
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+                $this->error("Gemini returned HTTP {$response->status()} for {$language}.");
+
+                continue;
+            }
+
+            $results = $this->extractLearningResults($response->json());
+            if ($results === null) {
+                $this->error("Gemini returned invalid JSON for {$language}.");
+                continue;
+            }
+
+            $pendingByQuery = $pending->keyBy(fn (ChatbotUnhandledQuery $query) => $this->normalize($query->query, $language));
+            $processedIds = [];
+
+            foreach ($results as $item) {
+                $keyword = trim((string) ($item['keyword'] ?? ''));
+                $matchedFlow = trim((string) ($item['matched_flow'] ?? 'none'));
+                $matchedBranch = trim((string) ($item['matched_branch'] ?? ''));
+                $confidence = isset($item['confidence']) ? (float) $item['confidence'] : null;
+                $generatedResponse = isset($item['generated_response']) ? trim((string) $item['generated_response']) : null;
+
+                if ($keyword === '') {
+                    continue;
+                }
+
+                $normalized = $this->normalize($keyword, $language);
+                $unhandled = $pendingByQuery->get($normalized);
+                if ($unhandled) {
+                    $processedIds[] = $unhandled->id;
+                }
+
+                if ($matchedFlow === 'none') {
+                    continue;
+                }
+
+                if ($matchedFlow !== 'chitchat' && ! $this->isValidTarget($flowMap, $matchedFlow, $matchedBranch !== '' ? $matchedBranch : null)) {
+                    continue;
+                }
+
+                ChatbotLearnedKeyword::updateOrCreate(
+                    [
+                        'language' => $language,
+                        'normalized_keyword' => $normalized,
+                    ],
+                    [
+                        'keyword' => $keyword,
+                        'target_flow' => $matchedFlow,
+                        'target_branch' => $matchedBranch !== '' ? $matchedBranch : null,
+                        'custom_response' => $matchedFlow === 'chitchat' ? $generatedResponse : null,
+                        'source' => 'gemini',
+                        'confidence' => $confidence,
+                    ]
+                );
+
+                $totalLearned++;
+            }
+
+            if ($processedIds !== []) {
+                ChatbotUnhandledQuery::query()
+                    ->whereIn('id', array_unique($processedIds))
+                    ->update([
+                        'status' => 'processed',
+                        'processed_at' => now(),
+                    ]);
+            }
+
+            $this->info("Processed {$language}: learned {$totalLearned} total keywords so far.");
         }
 
-        $this->info("========================================");
-        $this->info("Learning from Unhandled Queries Completed!");
-        $this->info("Total learned from user errors: {$totalLearned} keywords.");
-        $this->outputDetailList('Detailed results', $learnedDetails);
-        $this->info("========================================");
+        $this->info("Chatbot auto learning completed. Learned {$totalLearned} keywords.");
 
         return self::SUCCESS;
     }
@@ -225,121 +196,24 @@ class ChatbotLearnFromUnhandledCommand extends Command
 
     private function extractLearningResults(array $body): ?array
     {
-        $text = $this->getLearningResponseText($body);
-        if (!is_string($text) || trim($text) === '') {
+        $text = data_get($body, 'candidates.0.content.parts.0.text');
+        if (! is_string($text) || trim($text) === '') {
             return null;
         }
 
+        $text = trim(preg_replace('/^```(?:json)?\s*|\s*```$/', '', $text));
         $decoded = json_decode($text, true);
-        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
-            Log::warning('Chatbot learn-from-unhandled returned invalid JSON from Gemini', [
-                'raw_text' => mb_substr($text, 0, 2000),
-                'json_error' => json_last_error_msg(),
-            ]);
-            return null;
-        }
 
-        if (!isset($decoded['learning_results']) || !is_array($decoded['learning_results'])) {
-            Log::warning('Chatbot learn-from-unhandled Gemini output missing learning_results', [
-                'decoded' => $decoded,
-            ]);
+        if (! is_array($decoded) || ! isset($decoded['learning_results']) || ! is_array($decoded['learning_results'])) {
             return null;
         }
 
         return $decoded['learning_results'];
     }
 
-    private function executeGeminiRequest(string $prompt, string $model, int $timeout, array $generationConfig)
-    {
-        $apiKey = config('services.gemini.key');
-        if (!$apiKey) {
-            Log::error("Gemini API key not configured");
-            return null;
-        }
-
-        // 👇 تم إصلاح السطر بالأسفل بإضافة الـ API Key في نهاية الرابط الـ v1beta
-        $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}";
-
-        try {
-            $response = Http::timeout($timeout)
-                ->withHeaders(['Content-Type' => 'application/json'])
-                ->post($endpoint, [
-                    'contents' => [
-                        [
-                            'parts' => [
-                                ['text' => $prompt],
-                            ],
-                        ],
-                    ],
-                    'generationConfig' => array_merge($generationConfig, [
-                        'responseMimeType' => 'application/json',
-                    ]),
-                ]);
-
-            if ($response->successful()) {
-                return $response;
-            }
-
-            // Log failed response with HTTP status
-            Log::error("Gemini request failed for model {$model}: HTTP {$response->status()}", [
-                'body' => mb_substr($response->body(), 0, 300),
-            ]);
-
-            // Try fallback model only for rate-limit / service issues, not 404
-            if (in_array($response->status(), [429, 503, 504], true)) {
-                $fallbackModel = config('services.gemini.fallback_model', 'gemini-1.5-flash');
-                if ($fallbackModel !== $model) {
-                    Log::info("Trying fallback model {$fallbackModel}");
-                    return $this->executeGeminiRequest($prompt, $fallbackModel, $timeout, $generationConfig);
-                }
-            }
-
-            // Return response even if failed so we can see the error message
-            return $response;
-        } catch (\Throwable $exception) {
-            Log::error("Gemini request exception: " . $exception->getMessage(), [
-                'model' => $model,
-                'class' => class_basename($exception),
-            ]);
-            return null;
-        }
-    }
-
-    private function getLearningResponseText(array $body): ?string
-    {
-        $candidates = [
-            'candidates.0.content.parts.0.text',
-            'candidates.0.content.0.text',
-            'candidates.0.output.0.content.0.text',
-            'candidates.0.text',
-        ];
-
-        foreach ($candidates as $path) {
-            $text = data_get($body, $path);
-            if (is_string($text) && trim($text) !== '') {
-                return $this->cleanLearningResponseText($text);
-            }
-        }
-
-        return null;
-    }
-
-    private function cleanLearningResponseText(string $text): string
-    {
-        $text = trim($text);
-        $text = preg_replace('/^```(?:json)?\s*/i', '', $text);
-        $text = preg_replace('/\s*```$/', '', $text);
-        $text = preg_replace('/^\s*JSON:\s*/i', '', $text);
-
-        $backticks = chr(96) . chr(96) . chr(96);
-        $text = str_replace([$backticks . 'json', $backticks], '', $text);
-
-        return trim($text);
-    }
-
     private function isValidTarget(array $flowMap, string $flow, ?string $branch): bool
     {
-        if (!isset($flowMap[$flow])) {
+        if (! isset($flowMap[$flow])) {
             return false;
         }
 
@@ -352,61 +226,9 @@ class ChatbotLearnFromUnhandledCommand extends Command
 
         if ($language === 'ar') {
             $text = str_replace(['أ', 'إ', 'آ', 'ى', 'ئ', 'ؤ', 'ة', 'ـ'], ['ا', 'ا', 'ا', 'ي', 'ي', 'و', 'ه', ''], $text);
+            $text = str_replace(['أ', 'إ', 'آ', 'ى', 'ئ', 'ؤ', 'ة', 'ـ'], ['ا', 'ا', 'ا', 'ي', 'ي', 'و', 'ه', ''], $text);
         }
 
         return Str::squish($text);
-    }
-
-    private function persistLearnedKeyword(
-        string $language,
-        string $normalized,
-        string $keyword,
-        string $matchedFlow,
-        ?string $matchedBranch,
-        ?string $generatedResponse,
-        string $source,
-        ?float $confidence
-    ): ?string {
-        $record = ChatbotLearnedKeyword::firstOrNew([
-            'language' => $language,
-            'normalized_keyword' => $normalized,
-        ]);
-
-        $record->keyword = $keyword;
-        $record->target_flow = $matchedFlow;
-        $record->target_branch = $matchedBranch;
-        $record->custom_response = $generatedResponse;
-        $record->source = $source;
-        $record->confidence = $confidence;
-        $record->save();
-
-        $action = $record->wasRecentlyCreated ? 'added' : 'updated';
-        $flowBranch = $matchedBranch ? "{$matchedFlow}.{$matchedBranch}" : $matchedFlow;
-        $responsePart = $generatedResponse ? " | response: {$generatedResponse}" : '';
-
-        return sprintf(
-            '%s: "%s" => %s%s',
-            ucfirst($action),
-            $keyword,
-            $flowBranch,
-            $responsePart
-        );
-    }
-
-    private function outputDetailList(string $title, array $items): void
-    {
-        if (empty($items)) {
-            $this->info("{$title}: none.");
-            return;
-        }
-
-        $this->info("{$title}:");
-        foreach (array_slice($items, 0, 80) as $item) {
-            $this->line(" - {$item}");
-        }
-
-        if (count($items) > 80) {
-            $this->info('... and ' . (count($items) - 80) . ' more results.');
-        }
     }
 }
