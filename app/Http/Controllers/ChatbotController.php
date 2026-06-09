@@ -249,7 +249,7 @@ class ChatbotController extends Controller
 
             return response()->json([
                 'reply' => $lang === 'ar'
-                    ? 'عذراً، حدث خطأ في السيرفر. الرجاء المحاولة مرة أخرى.'
+                    ? 'عذراً، حدث2 خطأ في السيرفر. الرجاء المحاولة مرة أخرى.'
                     : 'Sorry, a server error occurred. Please try again.',
             ], 500);
         }
