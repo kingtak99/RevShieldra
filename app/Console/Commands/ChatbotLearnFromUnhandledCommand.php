@@ -19,7 +19,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
     public function handle(): int
     {
         $apiKey = config('services.gemini.key');
-        $model = config('services.gemini.model', 'gemini-flash-latest');
+        $model = config('services.gemini.model', env('GEMINI_MODEL', 'gemini-flash-latest'));
 
         if (!$apiKey) {
             $this->warn('GEMINI_API_KEY is not configured.');
@@ -257,7 +257,8 @@ class ChatbotLearnFromUnhandledCommand extends Command
             return null;
         }
 
-        $endpoint = "https://generativelanguage.googleapis.com/v1/models/{$model}:generateContent?key={$apiKey}";
+        // $endpoint = "https://generativelanguage.googleapis.com/v1/models/{$model}:generateContent?key={$apiKey}";
+        $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent";
         try {
             $response = Http::timeout($timeout)
                 ->withHeaders(['Content-Type' => 'application/json'])
