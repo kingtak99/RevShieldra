@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
-class ChatbotAutoLearnCommand extends Command
+class ChatbotLearnFromUnhandledCommand extends Command
 {
     protected $signature = 'chatbot:auto-learn {--limit=50 : Maximum pending queries per language}';
 
