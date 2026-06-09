@@ -44,6 +44,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 continue;
             }
 
+            $pendingIds = $pending->pluck('id')->all();
             $flowMap = $this->buildFlowMap($language);
             $prompt = $this->buildPrompt($language, $flowMap, $pending->pluck('query')->all());
 
@@ -68,6 +69,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 Log::warning('Chatbot auto learn Gemini request failed: ' . $exception->getMessage());
                 $this->error("Gemini request failed for {$language}: {$exception->getMessage()}");
 
+                $this->markPendingBatchAsFailed($pendingIds, $language, $exception->getMessage());
                 continue;
             }
 
@@ -79,12 +81,14 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 ]);
                 $this->error("Gemini returned HTTP {$response->status()} for {$language}.");
 
+                $this->markPendingBatchAsFailed($pendingIds, $language, "HTTP {$response->status()}");
                 continue;
             }
 
             $results = $this->extractLearningResults($response->json());
             if ($results === null) {
                 $this->error("Gemini returned invalid JSON for {$language}.");
+                $this->markPendingBatchAsFailed($pendingIds, $language, 'invalid_json');
                 continue;
             }
 
@@ -134,14 +138,12 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 $totalLearned++;
             }
 
-            if ($processedIds !== []) {
-                ChatbotUnhandledQuery::query()
-                    ->whereIn('id', array_unique($processedIds))
-                    ->update([
-                        'status' => 'processed',
-                        'processed_at' => now(),
-                    ]);
-            }
+            ChatbotUnhandledQuery::query()
+                ->whereIn('id', $pendingIds)
+                ->update([
+                    'status' => 'processed',
+                    'processed_at' => now(),
+                ]);
 
             $this->info("Processed {$language}: learned {$totalLearned} total keywords so far.");
         }
@@ -230,5 +232,25 @@ class ChatbotLearnFromUnhandledCommand extends Command
         }
 
         return Str::squish($text);
+    }
+
+    private function markPendingBatchAsFailed(array $ids, string $language, string $reason): void
+    {
+        if ($ids === []) {
+            return;
+        }
+
+        ChatbotUnhandledQuery::query()
+            ->whereIn('id', $ids)
+            ->update([
+                'status' => 'failed',
+                'processed_at' => now(),
+            ]);
+
+        Log::warning('Marked pending unhandled queries as failed', [
+            'language' => $language,
+            'error' => $reason,
+            'ids' => $ids,
+        ]);
     }
 }
