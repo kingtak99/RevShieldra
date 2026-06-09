@@ -132,14 +132,14 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 } else {
                     $errorBody = $response ? $response->body() : 'no response';
                     Log::warning("Gemini failed for pending {$language} queries", ['body' => $errorBody]);
-                    
+
                     if (str_contains($errorBody, 'exceeded your current quota')) {
                         $this->error("❌ Gemini API Quota Exceeded!");
                         $this->error("Your API plan has reached its limit. Please:");
                         $this->error("1. Check your Google Cloud Console quota usage");
                         $this->error("2. Upgrade your API plan if needed");
                         $this->error("3. Contact Google Cloud support");
-                        
+
                         // Fallback: Map unhandled queries using local keyword matching
                         $this->info("Using fallback keyword matching (offline mode)...");
                         foreach ($pending as $unhandledQuery) {
@@ -257,8 +257,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
             return null;
         }
 
-        $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}";
-
+        $endpoint = "https://generativelanguage.googleapis.com/v1/models/{$model}:generateContent?key={$apiKey}";
         try {
             $response = Http::timeout($timeout)
                 ->withHeaders(['Content-Type' => 'application/json'])

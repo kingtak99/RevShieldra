@@ -11,393 +11,205 @@ use Illuminate\Support\Str;
 
 class ChatbotSelfLearningCommand extends Command
 {
-    protected $signature = 'chatbot:self-learning';
+    // الاسم البرمجي لتشغيل الأمر عبر Artisan
+    protected $signature = 'chatbot:self-learning {language=ar}';
 
-    protected $description = 'Proactively generate new keywords and phrases for existing flows using Gemini without requiring user errors.';
+    // وصف الأمر
+    protected $description = 'Proactively generate keywords for a single language with robust fallback and retry logic for Free Tier API limits.';
 
     public function handle(): int
     {
-        $apiKey = config('services.gemini.key');
-        $model = config('services.gemini.model', 'gemini-flash-latest');
+        // قراءة المفتاح مباشرة من الـ Config أو الـ env كخيار احتياطي لضمان العمل
+        $apiKey = config('services.gemini.key', env('GEMINI_API_KEY'));
+        $model = config('services.gemini.model', env('GEMINI_MODEL', 'gemini-flash-latest'));
+        $language = $this->argument('language');
 
         if (!$apiKey) {
-            $this->warn('GEMINI_API_KEY is not configured.');
+            $this->warn('GEMINI_API_KEY is not configured in .env file.');
             return self::FAILURE;
         }
 
-        $totalGenerated = 0;
-        $generatedDetails = [];
+        $this->info("\n========================================");
+        $this->info("Self-Learning for [{$language}] Language");
+        $this->info("========================================");
 
-        foreach (['ar', 'en'] as $language) {
-            $this->info("========================================");
-            $this->info("Self-Learning for [{$language}] Language");
-            $this->info("========================================");
+        $flowMap = $this->buildFlowMap($language);
+        $flows = array_keys($flowMap['root']['flows'] ?? []);
+        $targetFlow = count($flows) > 0 ? $flows[array_rand($flows)] : null;
 
-            // جلب خريطة التدفقات الحالية
-            $flowMap = $this->buildFlowMap($language);
+        if (!$targetFlow) {
+            $this->info("No flows found to learn.");
+            return self::SUCCESS;
+        }
 
-            // جلب الكلمات التي تعلمها البوت بالفعل لتجنب التكرار
-            $existingLearnedKeywords = ChatbotLearnedKeyword::query()
-                ->where('language', $language)
-                ->limit(80)
-                ->pluck('keyword')
-                ->all();
+        $this->info("Targeting flow: {$targetFlow}");
+        $this->info("Using Model: {$model}");
 
-            $this->info("Found " . count($existingLearnedKeywords) . " existing keywords (sample for optimization).");
-            $this->info("Launching proactive generation cycle...");
+        // محاولة تنفيذ الطلب مع آلية إعادة محاولة ذكية عند حدوث 429 أو 503
+        $response = null;
+        $maxRetries = 2;
+        $attempt = 0;
+        $success = false;
 
-            $expansionPrompt = $this->buildSelfExpansionPrompt($language, $flowMap, $existingLearnedKeywords);
-
+        while ($attempt <= $maxRetries) {
             try {
-                $response = $this->executeGeminiRequest($expansionPrompt, $model, 15, [
-                    'temperature' => 0.6,
-                    'maxOutputTokens' => 1200,
-                ]);
+                $response = $this->executeGeminiRequest($this->buildTargetedPrompt($language, $targetFlow), $model, $apiKey);
 
-                if (!$response) {
-                    $this->warn("⚠️  Gemini API not responding. Check storage/logs/laravel.log for details.");
-                    Log::warning("Gemini request returned null for {$language}");
-                } elseif ($response->successful()) {
-                    $expandedResults = $this->extractLearningResults($response->json());
-                    if ($expandedResults !== null) {
-                        $this->info("Gemini returned " . count($expandedResults) . " generated results.");
+                if ($response && $response->successful()) {
+                    $success = true;
+                    break;
+                }
 
-                        foreach ($expandedResults as $item) {
-                            $keyword = trim((string) ($item['keyword'] ?? ''));
-                            $matchedFlow = trim((string) ($item['matched_flow'] ?? 'none'));
-                            $matchedBranch = trim((string) ($item['matched_branch'] ?? ''));
-                            $confidence = isset($item['confidence']) ? (float) $item['confidence'] : 0.85;
-                            $generatedResponse = isset($item['generated_response']) ? trim((string) $item['generated_response']) : null;
-
-                            if ($keyword === '' || $matchedFlow === 'none') {
-                                continue;
-                            }
-
-                            if ($matchedFlow !== 'chitchat' && !$this->isValidTarget($flowMap, $matchedFlow, $matchedBranch !== '' ? $matchedBranch : null)) {
-                                continue;
-                            }
-
-                            $normalized = $this->normalize($keyword, $language);
-
-                            // حفظ الكلمات المبتكرة ذاتياً
-                            $summary = $this->persistLearnedKeyword(
-                                $language,
-                                $normalized,
-                                $keyword,
-                                $matchedFlow,
-                                $matchedBranch !== '' ? $matchedBranch : null,
-                                $matchedFlow === 'chitchat' ? $generatedResponse : null,
-                                'self_learning',
-                                $confidence
-                            );
-
-                            if ($summary !== null) {
-                                $generatedDetails[] = $summary;
-                                $totalGenerated++;
-                            }
-                        }
-
-                        $this->info("Successfully processed " . count($expandedResults) . " results.");
-                    } else {
-                        Log::warning("Gemini self-expansion returned no parseable results for {$language}", [
-                            'body' => $response->body(),
-                        ]);
-                        $this->warn("Gemini returned unparseable results.");
-                    }
-                } else {
-                    $errorBody = $response ? $response->body() : 'no response';
-                    Log::warning("Gemini self-expansion request failed for {$language}", ['body' => $errorBody]);
-                    
-                    if (str_contains($errorBody, 'exceeded your current quota')) {
-                        $this->error("❌ Gemini API Quota Exceeded!");
-                        $this->error("Your API plan has reached its limit. Please:");
-                        $this->error("1. Check your Google Cloud Console quota usage");
-                        $this->error("2. Upgrade your API plan if needed");
-                        $this->error("3. Contact Google Cloud support");
-                        
-                        // Fallback: استخدام keywords مسبقة
-                        if ($language === 'ar') {
-                            $fallbackKeywords = ['عملية احتيالية', 'محاولة احتيال', 'معاملة مشبوهة', 'تحويل غير آمن'];
-                        } else {
-                            $fallbackKeywords = ['fraudulent transaction', 'suspicious activity', 'unauthorized charge', 'payment fraud'];
-                        }
-                        
-                        $this->info("Using fallback keywords to maintain service (offline mode)...");
-                        foreach ($fallbackKeywords as $keyword) {
-                            if (!ChatbotLearnedKeyword::where('keyword', $keyword)->where('language', $language)->exists()) {
-                                $summary = $this->persistLearnedKeyword(
-                                    $language,
-                                    $this->normalize($keyword, $language),
-                                    $keyword,
-                                    'fraud_detection',
-                                    null,
-                                    null,
-                                    'fallback_offline',
-                                    0.8
-                                );
-                                if ($summary !== null) {
-                                    $generatedDetails[] = $summary;
-                                    $totalGenerated++;
-                                }
-                            }
-                        }
-                        $this->info("Added " . $totalGenerated . " fallback keywords.");
-                    } elseif (str_contains($errorBody, 'high demand')) {
-                        $this->warn("⚠️  Gemini API High Demand: Service temporarily unavailable");
-                        $this->warn("Please try again later.");
-                    } else {
-                        $this->warn("Gemini API failed: " . mb_substr($errorBody, 0, 200));
+                if ($response && ($response->status() === 429 || $response->status() === 503)) {
+                    $attempt++;
+                    if ($attempt <= $maxRetries) {
+                        // وقت انتظار تصاعدي حقيقي لتخطي نافذة الدقيقة للـ Free Tier بنجاح
+                        $wait = ($attempt === 1) ? rand(31, 40) : rand(41, 50);
+                        $this->warn("Rate limit hit (429/503). Waiting {$wait} seconds before retry {$attempt}/{$maxRetries} to bypass Google restrictions...");
+                        sleep($wait);
+                        continue;
                     }
                 }
-            } catch (\Throwable $exception) {
-                Log::error("Failed to execute self-expansion for {$language}: " . $exception->getMessage());
-                $this->error("Error: " . $exception->getMessage());
+                break;
+            } catch (\Throwable $e) {
+                Log::error("Gemini API Exception [{$language}]: " . $e->getMessage());
+                break;
             }
         }
 
-        $this->info("========================================");
-        $this->info("Self-Learning Cycle Completed!");
-        $this->info("Total proactive keywords generated: {$totalGenerated}.");
-        $this->outputDetailList('Generated keywords', $generatedDetails);
-        $this->info("========================================");
+        // معالجة النتائج في حال النجاح
+        if ($success && $response) {
+            $expandedResults = $this->extractLearningResults($response->json());
+            $count = 0;
+            if ($expandedResults) {
+                foreach ($expandedResults as $item) {
+                    $keyword = trim((string) ($item['keyword'] ?? ''));
+                    if ($keyword === '' || !$this->isValidTarget($flowMap, $targetFlow, null))
+                        continue;
+
+                    if ($this->persistLearnedKeyword($language, $this->normalize($keyword, $language), $keyword, $targetFlow, null, null, 'ai_gen', 0.9)) {
+                        $count++;
+                        $this->line(" <info>Added AI Keyword:</info> \"{$keyword}\"");
+                    }
+                }
+            }
+            $this->info("\n🎉 Cycle Completed successfully! Generated: {$count} keywords for flow [{$targetFlow}].");
+        } else {
+            // في حال فشل الاتصال بالكامل بعد المحاولات، يتم الانتقال تلقائياً للـ Fallback الذكي المخصص للتدفق المستهدف
+            $errorBody = $response ? $response->body() : 'No response / Connection Timeout';
+            Log::warning("Gemini API failed for [{$language}] (Resorting to Offline Fallback). Reason: " . $errorBody);
+
+            $this->warn("\n⚠️  Gemini API is currently busy or rate-limited. Activating targeted offline fallback...");
+            $this->runOfflineFallback($language, $targetFlow);
+        }
 
         return self::SUCCESS;
     }
 
-    private function buildFlowMap(string $language): array
+    /**
+     * تشغيل نظام الطوارئ الذكي لتوليد كلمات مفتاحية محلية تناسب التدفق المستهدف بدقة
+     */
+    private function runOfflineFallback(string $language, string $flow): void
     {
-        $flows = ChatbotFlowService::getFlows($language);
-        $map = [];
+        // بنية ذكية للكلمات المفتاحية المسبقة لضمان تغذية ذكية للبوت عند انقطاع الـ API
+        $fallbackDatabase = [
+            'ar' => [
+                'setup' => ['طريقة ضبط البوت', 'إعداد النظام', 'تهيئة الحساب', 'تعديل الإعدادات'],
+                'pricing' => ['كم الاشتراك', 'بكم الخدمة', 'باقات الأسعار', 'تكلفة الخدمة'],
+                'support' => ['تحدث مع الدعم', 'مساعدة فنية', 'الدعم الفني', 'عندي مشكلة'],
+                'platform' => ['منصة ريف شيلدرا', 'كيف تعمل المنصة', 'شرح الموقع', 'ميزات المنصة'],
+                'default' => ['معاملة مشبوهة', 'عملية احتيالية', 'تحويل مشكوك فيه', 'رابط غير آمن']
+            ],
+            'en' => [
+                'setup' => ['setup bot', 'configuration guide', 'how to configure', 'initialize system'],
+                'pricing' => ['how much', 'pricing plans', 'subscription cost', 'payment options'],
+                'support' => ['contact support', 'technical help', 'open a ticket', 'customer support'],
+                'platform' => ['how it works', 'about platform', 'revshieldra features', 'platform demo'],
+                'default' => ['suspicious link', 'fraud transaction', 'unauthorized charge', 'scam alert']
+            ]
+        ];
 
-        foreach (($flows['root']['flows'] ?? []) as $flowKey => $flow) {
-            $map[$flowKey] = [
-                'label' => $flow['label'] ?? $flowKey,
-                'branches' => [],
-            ];
+        $list = $fallbackDatabase[$language][$flow] ?? $fallbackDatabase[$language]['default'];
+        $count = 0;
 
-            foreach (($flow['branches'] ?? []) as $branchKey => $branch) {
-                $map[$flowKey]['branches'][$branchKey] = [
-                    'label' => $branch['label'] ?? $branchKey,
-                    'response' => $branch['response'] ?? '',
-                    'category' => $branch['category'] ?? null,
-                ];
+        foreach ($list as $keyword) {
+            if ($this->persistLearnedKeyword($language, $this->normalize($keyword, $language), $keyword, $flow, null, null, 'offline_fallback', 0.75)) {
+                $count++;
+                $this->line(" <comment>Added Fallback Keyword:</comment> \"{$keyword}\"");
             }
         }
 
-        return $map;
+        if ($count > 0) {
+            $this->info("✅ Offline Fallback completed! Generated {$count} offline keywords for flow [{$flow}] successfully.");
+        } else {
+            $this->info("ℹ️ All offline fallback keywords for [{$flow}] already exist in the database.");
+        }
     }
 
-    private function buildSelfExpansionPrompt(string $language, array $flowMap, array $existingKeywords): string
+    private function buildTargetedPrompt(string $language, string $flow): string
     {
-        return implode("\n", [
-            "You are a proactive AI Self-Learning system for the RevShieldra chatbot.",
-            "Your goal is to brain-storm, predict, and generate realistic search queries, questions, or alternative phrases that a human might ask to trigger the existing system flows.",
-            "Language: {$language}",
-            "We want to build robust synonyms, colloquial phrases, typical user typos, and various syntactic ways of asking for things.",
-            "Here is the system's Flow Map JSON containing all targets you must generate phrases for:",
-            json_encode($flowMap, JSON_UNESCAPED_UNICODE),
-            "",
-            "These are keywords we already have in our database (DO NOT generate exact duplicates of these):",
-            json_encode(array_slice($existingKeywords, 0, 150), JSON_UNESCAPED_UNICODE),
-            "",
-            "Rules for Self-Learning & Brainstorming:",
-            "1. For each active flow and branch in the Flow Map, brainstorm 3 to 5 highly probable alternative ways a user would ask for it in a natural conversation.",
-            "2. Generate diverse formats: short direct commands, complete questions, colloquial slang (if Arabic, think of common Jordanian/Gulf/Levantine phrasings as well), and common typos.",
-            "3. If a flow relates to pricing, generate phrases like 'كم الاشتراك', 'بكم الخدمة', 'pricing options', 'how much'.",
-            "4. If a flow relates to location setup, generate phrases like 'كيف اضيف موقعي', 'اضافة فرع جديد', 'adding branches', 'new address'.",
-            "5. You can also generate pleasantries/chitchat variations (greetings, feedback compliments, test queries) and map them to 'chitchat' with an appropriate 'generated_response'.",
-            "6. Do not repeat any keyword that already exists in the provided keywords list. Avoid duplicates and avoid returning the same phrase with only small differences.",
-            "7. Return ONLY valid RAW JSON with no Markdown, no code fences, and no explanatory text.",
-            "8. If a prompt cannot be mapped to a flow, return matched_flow as 'none' and matched_branch as null.",
-            "9. Make sure 'matched_flow' and 'matched_branch' exactly match the keys present in the Flow Map JSON.",
-            "10. Return between 10 and 15 total creative results in the array to optimize API usage.",
-            '{"learning_results":[{"keyword":"brainstormed phrase or query","matched_flow":"flow_key_or_chitchat","matched_branch":"branch_key_or_null","confidence":0.90,"generated_response":"polite_reply_if_chitchat_else_null"}]}',
-        ]);
+        return "System Language: {$language}. Generate 2 unique user search queries that would trigger the flow '{$flow}'. Return ONLY JSON: {\"learning_results\":[{\"keyword\":\"...\",\"matched_flow\":\"{$flow}\"}]}";
+    }
+
+    private function executeGeminiRequest(string $prompt, string $model, string $apiKey)
+    {
+        $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent";
+
+        return Http::timeout(45)
+            ->withHeaders([
+                'Content-Type' => 'application/json',
+                'X-goog-api-key' => $apiKey
+            ])
+            ->post($endpoint, [
+                'contents' => [
+                    [
+                        'parts' => [
+                            ['text' => $prompt]
+                        ]
+                    ]
+                ],
+                'generationConfig' => [
+                    'responseMimeType' => 'application/json',
+                    'temperature' => 0.4
+                ]
+            ]);
     }
 
     private function extractLearningResults(array $body): ?array
     {
-        $text = $this->getLearningResponseText($body);
-        if (!is_string($text) || trim($text) === '') {
-            return null;
-        }
-
-        $decoded = json_decode($text, true);
-        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
-            Log::warning('Chatbot self-learning returned invalid JSON from Gemini', [
-                'raw_text' => mb_substr($text, 0, 2000),
-                'json_error' => json_last_error_msg(),
-            ]);
-            return null;
-        }
-
-        if (!isset($decoded['learning_results']) || !is_array($decoded['learning_results'])) {
-            Log::warning('Chatbot self-learning Gemini output missing learning_results', [
-                'decoded' => $decoded,
-            ]);
-            return null;
-        }
-
-        return $decoded['learning_results'];
+        $text = data_get($body, 'candidates.0.content.parts.0.text');
+        $data = json_decode(preg_replace('/^```json\s*|\s*```$/', '', $text ?? ''), true);
+        return $data['learning_results'] ?? null;
     }
 
-    private function executeGeminiRequest(string $prompt, string $model, int $timeout, array $generationConfig)
+    private function persistLearnedKeyword($l, $norm, $key, $flow, $branch, $resp, $src, $conf): bool
     {
-        $apiKey = config('services.gemini.key');
-        if (!$apiKey) {
-            Log::error("Gemini API key not configured");
-            return null;
-        }
-
-        $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}";
-
-        try {
-            $response = Http::timeout($timeout)
-                ->withHeaders(['Content-Type' => 'application/json'])
-                ->post($endpoint, [
-                    'contents' => [
-                        [
-                            'parts' => [
-                                ['text' => $prompt],
-                            ],
-                        ],
-                    ],
-                    'generationConfig' => array_merge($generationConfig, [
-                        'responseMimeType' => 'application/json',
-                    ]),
-                ]);
-
-            if ($response->successful()) {
-                return $response;
-            }
-
-            // Log failed response with HTTP status
-            Log::error("Gemini request failed for model {$model}: HTTP {$response->status()}", [
-                'body' => mb_substr($response->body(), 0, 300),
-            ]);
-
-            // Try fallback model only for rate-limit / service issues, not 404
-            if (in_array($response->status(), [429, 503, 504], true)) {
-                $fallbackModel = config('services.gemini.fallback_model', 'gemini-1.5-flash');
-                if ($fallbackModel !== $model) {
-                    Log::info("Trying fallback model {$fallbackModel}");
-                    return $this->executeGeminiRequest($prompt, $fallbackModel, $timeout, $generationConfig);
-                }
-            }
-
-            // Return response even if failed so we can see the error message
-            return $response;
-        } catch (\Throwable $exception) {
-            Log::error("Gemini request exception: " . $exception->getMessage(), [
-                'model' => $model,
-                'class' => class_basename($exception),
-            ]);
-            return null;
-        }
-    }
-
-    private function getLearningResponseText(array $body): ?string
-    {
-        $candidates = [
-            'candidates.0.content.parts.0.text',
-            'candidates.0.content.0.text',
-            'candidates.0.output.0.content.0.text',
-            'candidates.0.text',
-        ];
-
-        foreach ($candidates as $path) {
-            $text = data_get($body, $path);
-            if (is_string($text) && trim($text) !== '') {
-                return $this->cleanLearningResponseText($text);
-            }
-        }
-
-        return null;
-    }
-
-    private function cleanLearningResponseText(string $text): string
-    {
-        $text = trim($text);
-        $text = preg_replace('/^```(?:json)?\s*/i', '', $text);
-        $text = preg_replace('/\s*```$/', '', $text);
-        $text = preg_replace('/^\s*JSON:\s*/i', '', $text);
-
-        $backticks = chr(96) . chr(96) . chr(96);
-        $text = str_replace([$backticks . 'json', $backticks], '', $text);
-
-        return trim($text);
-    }
-
-    private function isValidTarget(array $flowMap, string $flow, ?string $branch): bool
-    {
-        if (!isset($flowMap[$flow])) {
+        if (ChatbotLearnedKeyword::where('language', $l)->where('normalized_keyword', $norm)->exists())
             return false;
-        }
-
-        return $branch === null || $branch === '' || isset($flowMap[$flow]['branches'][$branch]);
+        return ChatbotLearnedKeyword::create([
+            'language' => $l,
+            'normalized_keyword' => $norm,
+            'keyword' => $key,
+            'target_flow' => $flow,
+            'target_branch' => $branch,
+            'custom_response' => $resp,
+            'source' => $src,
+            'confidence' => $conf
+        ]) ? true : false;
     }
 
-    private function normalize(string $text, string $language): string
+    private function buildFlowMap(string $language): array
     {
-        $text = trim(mb_strtolower($text));
-
-        if ($language === 'ar') {
-            $text = str_replace(['أ', 'إ', 'آ', 'ى', 'ئ', 'ؤ', 'ة', 'ـ'], ['ا', 'ا', 'ا', 'ي', 'ي', 'و', 'ه', ''], $text);
-        }
-
-        return Str::squish($text);
+        return ChatbotFlowService::getFlows($language);
     }
 
-    private function persistLearnedKeyword(
-        string $language,
-        string $normalized,
-        string $keyword,
-        string $matchedFlow,
-        ?string $matchedBranch,
-        ?string $generatedResponse,
-        string $source,
-        ?float $confidence
-    ): ?string {
-        $record = ChatbotLearnedKeyword::firstOrNew([
-            'language' => $language,
-            'normalized_keyword' => $normalized,
-        ]);
-
-        $record->keyword = $keyword;
-        $record->target_flow = $matchedFlow;
-        $record->target_branch = $matchedBranch;
-        $record->custom_response = $generatedResponse;
-        $record->source = $source;
-        $record->confidence = $confidence;
-        $record->save();
-
-        $action = $record->wasRecentlyCreated ? 'added' : 'updated';
-        $flowBranch = $matchedBranch ? "{$matchedFlow}.{$matchedBranch}" : $matchedFlow;
-        $responsePart = $generatedResponse ? " | response: {$generatedResponse}" : '';
-
-        return sprintf(
-            '%s: "%s" => %s%s',
-            ucfirst($action),
-            $keyword,
-            $flowBranch,
-            $responsePart
-        );
-    }
-
-    private function outputDetailList(string $title, array $items): void
+    private function isValidTarget($flowMap, $flow, $branch): bool
     {
-        if (empty($items)) {
-            $this->info("{$title}: none.");
-            return;
-        }
+        return isset($flowMap['root']['flows'][$flow]);
+    }
 
-        $this->info("{$title}:");
-        foreach (array_slice($items, 0, 80) as $item) {
-            $this->line(" - {$item}");
-        }
-
-        if (count($items) > 80) {
-            $this->info('... and ' . (count($items) - 80) . ' more results.');
-        }
+    private function normalize($t, $l): string
+    {
+        return Str::squish(mb_strtolower($t));
     }
 }
