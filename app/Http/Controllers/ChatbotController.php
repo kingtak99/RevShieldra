@@ -3,20 +3,18 @@
 namespace App\Http\Controllers;
 
 use App\Mail\SupportTicketMail;
+use App\Models\ChatbotLearnedKeyword;
 use App\Models\ChatbotLog;
+use App\Models\ChatbotUnhandledQuery;
 use App\Services\ChatbotFlowService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
-use Illuminate\Support\Facades\DB;
 
 class ChatbotController extends Controller
 {
-    /**
-     * الدالة الرئيسية لاستقبال ومعالجة رسائل الدردشة
-     */
     public function handleChat(Request $request)
     {
         $request->validate([
@@ -32,263 +30,201 @@ class ChatbotController extends Controller
             $userId = auth()->check() ? auth()->id() : null;
             $userEmail = auth()->check() ? auth()->user()->email : null;
 
-            // معالجة التنقل الذكي عبر المسارات (Flow Navigation)
-            if ($action === 'flow') {
-                return $this->handleFlowAction($request, $sessionId, $userId, $userEmail, $lang);
-            }
+        // Handle Flow Navigation (new system)
+        if ($action === 'flow') {
+            return $this->handleFlowAction($request, $sessionId, $userId, $userEmail, $lang);
+        }
 
-            if ($action === 'navigate') {
-                return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
-            }
+        if ($action === 'navigate') {
+            return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
+        }
 
-            if ($action === 'back') {
-                return $this->handleBackAction($request, $sessionId, $userId, $userEmail, $lang);
-            }
+        if ($action === 'back') {
+            return $this->handleBackAction($request, $sessionId, $userId, $userEmail, $lang);
+        }
 
-            if ($action === 'ticket') {
-                $request->validate([
-                    'email' => 'required|email',
-                    'message' => 'required|string',
-                    'name' => 'nullable|string',
-                    'category' => 'nullable|string',
-                ]);
+        if ($action === 'ticket') {
+            $request->validate([
+                'email' => 'required|email',
+                'message' => 'required|string',
+                'name' => 'nullable|string',
+                'category' => 'nullable|string',
+            ]);
 
-                return $this->submitTicketWithContext($request, $sessionId, $userId, $userEmail, $lang);
-            }
+            return $this->submitTicketWithContext($request, $sessionId, $userId, $userEmail, $lang);
+        }
 
-            $message = $request->input('message');
+        $message = $request->input('message');
 
-            // حفظ رسالة المستخدم في اللوج بشكل آمن
-            try {
-                DB::table('chatbot_logs')->insert([
+        ChatbotLog::create([
+            'user_id' => $userId,
+            'user_email' => $userEmail,
+            'session_id' => $sessionId,
+            'sender' => 'user',
+            'message' => $message,
+            'language' => $lang,
+            'log_type' => 'chat',
+        ]);
+
+        if ($this->isGreeting($message, $lang)) {
+            $greetingReply = $lang === 'ar'
+                ? 'أهلاً بك! يمكنك اختيار أحد المسارات التالية للحصول على إجابة دقيقة وسريعة.'
+                : 'Welcome! Please choose one of the paths below for an accurate answer.';
+
+            ChatbotLog::create([
+                'user_id' => $userId,
+                'user_email' => $userEmail,
+                'session_id' => $sessionId,
+                'sender' => 'bot',
+                'message' => $greetingReply,
+                'language' => $lang,
+                'log_type' => 'chat',
+            ]);
+
+            return response()->json([
+                'reply' => $greetingReply,
+                'flow' => 'chat',
+                'show_root_menu' => true,
+            ]);
+        }
+
+        $learnedFlowMatch = $this->detectLearnedFlowFromMessage($message, $lang);
+        if ($learnedFlowMatch) {
+            ChatbotLog::create([
+                'user_id' => $userId,
+                'user_email' => $userEmail,
+                'session_id' => $sessionId,
+                'sender' => 'bot',
+                'message' => 'Learned flow detection triggered',
+                'language' => $lang,
+                'log_type' => 'flow_detection',
+                'metadata' => json_encode($learnedFlowMatch),
+            ]);
+
+            if ($learnedFlowMatch['flow'] === 'chitchat') {
+                $reply = $learnedFlowMatch['custom_response'] ?? ($lang === 'ar'
+                    ? 'أهلاً بك! كيف يمكنني مساعدتك اليوم؟'
+                    : 'Hello there! How can I help you today?');
+
+                ChatbotLog::create([
                     'user_id' => $userId,
                     'user_email' => $userEmail,
                     'session_id' => $sessionId,
-                    'sender' => 'user',
-                    'message' => $message,
+                    'sender' => 'bot',
+                    'message' => $reply,
                     'language' => $lang,
                     'log_type' => 'chat',
-                    'created_at' => now(),
-                    'updated_at' => now(),
                 ]);
-            } catch (\Exception $logEx) {
-                Log::warning('Failed to log user message: ' . $logEx->getMessage());
-            }
-
-            // التحقق مما إذا كانت الرسالة عبارة عن ترحيب
-            if ($this->isGreeting($message, $lang)) {
-                $greetingReply = $lang === 'ar'
-                    ? 'أهلاً بك! يمكنك اختيار أحد المسارات التالية للحصول على إجابة دقيقة وسريعة.'
-                    : 'Welcome! Please choose one of the paths below for an accurate answer.';
-
-                try {
-                    DB::table('chatbot_logs')->insert([
-                        'user_id' => $userId,
-                        'user_email' => $userEmail,
-                        'session_id' => $sessionId,
-                        'sender' => 'bot',
-                        'message' => $greetingReply,
-                        'language' => $lang,
-                        'log_type' => 'chat',
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                } catch (\Exception $logEx) {
-                    Log::warning('Failed to log greeting reply: ' . $logEx->getMessage());
-                }
 
                 return response()->json([
-                    'reply' => $greetingReply,
+                    'reply' => $reply,
                     'flow' => 'chat',
                     'show_root_menu' => true,
                 ]);
             }
 
-            // 1. فحص الكلمات والمسارات التي تم تعلمها تلقائياً (Learned Flows)
-            $learnedFlowMatch = $this->detectLearnedFlowFromMessage($message, $lang);
-            if ($learnedFlowMatch) {
-                try {
-                    DB::table('chatbot_logs')->insert([
-                        'user_id' => $userId,
-                        'user_email' => $userEmail,
-                        'session_id' => $sessionId,
-                        'sender' => 'bot',
-                        'message' => 'Learned flow detection triggered',
-                        'language' => $lang,
-                        'log_type' => 'flow_detection',
-                        'metadata' => json_encode($learnedFlowMatch),
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                } catch (\Exception $logEx) {
-                    Log::warning('Failed to log learned flow trigger: ' . $logEx->getMessage());
-                }
+            $request->merge([
+                'flow_key' => $learnedFlowMatch['flow'],
+                'branch_key' => $learnedFlowMatch['branch'] ?? null,
+            ]);
 
-                // إذا كان التصنيف دردشة عامة (Chitchat)
-                if (($learnedFlowMatch['flow'] ?? '') === 'chitchat') {
-                    $reply = $learnedFlowMatch['custom_response'] ?? ($lang === 'ar'
-                        ? 'أهلاً بك! كيف يمكنني مساعدتك اليوم؟'
-                        : 'Hello there! How can I help you today?');
+            return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
+        }
 
-                    try {
-                        DB::table('chatbot_logs')->insert([
-                            'user_id' => $userId,
-                            'user_email' => $userEmail,
-                            'session_id' => $sessionId,
-                            'sender' => 'bot',
-                            'message' => $reply,
-                            'language' => $lang,
-                            'log_type' => 'chat',
-                            'created_at' => now(),
-                            'updated_at' => now(),
-                        ]);
-                    } catch (\Exception $logEx) {
-                        Log::warning('Failed to log chitchat reply: ' . $logEx->getMessage());
-                    }
+        // Try smart flow detection - match keywords to flows
+        $flowMatch = $this->detectFlowFromMessage($message, $lang);
+        if ($flowMatch) {
+            // Log the detected flow
+            ChatbotLog::create([
+                'user_id' => $userId,
+                'user_email' => $userEmail,
+                'session_id' => $sessionId,
+                'sender' => 'bot',
+                'message' => 'Smart flow detection triggered',
+                'language' => $lang,
+                'log_type' => 'flow_detection',
+                'metadata' => json_encode($flowMatch)
+            ]);
 
-                    return response()->json([
-                        'reply' => $reply,
-                        'flow' => 'chat',
-                        'show_root_menu' => true,
-                    ]);
-                }
+            // Auto-navigate to the matched flow using navigate action
+            $branchKey = $flowMatch['branch'] ?? null;
+            $request->merge([
+                'flow_key' => $flowMatch['flow'],
+                'branch_key' => $branchKey
+            ]);
 
-                // إذا كان التوجيه لمسار مخصص من الأوامر الذكية
-                $extractedFlow = $learnedFlowMatch['flow'] ?? null;
-                $extractedBranch = $learnedFlowMatch['branch'] ?? null;
-
-                if ($extractedFlow) {
-                    $redirectMessage = $lang === 'ar' ? 'جاري توجيهك للمسار المطلوب...' : 'Redirecting you to the requested path...';
-
-                    return response()->json([
-                        'reply' => $redirectMessage,
-                        'action' => 'navigate',
-                        'flow' => 'navigate',
-                        'flow_key' => $extractedFlow,
-                        'branch_key' => $extractedBranch,
-                        'auto_redirect' => true
-                    ]);
-                }
+            if (!empty($branchKey)) {
+                // Direct to branch
+                return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
             }
 
-            // 2. محاولة مطابقة الكلمات بشكل ذكي مع المسارات الافتراضية الثابتة (Smart Flow Detection)
-            $flowMatch = $this->detectFlowFromMessage($message, $lang);
-            if ($flowMatch) {
-                try {
-                    DB::table('chatbot_logs')->insert([
-                        'user_id' => $userId,
-                        'user_email' => $userEmail,
-                        'session_id' => $sessionId,
-                        'sender' => 'bot',
-                        'message' => 'Smart flow detection triggered',
-                        'language' => $lang,
-                        'log_type' => 'flow_detection',
-                        'metadata' => json_encode($flowMatch),
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                } catch (\Exception $logEx) {
-                    Log::warning('Failed to log smart flow trigger: ' . $logEx->getMessage());
-                }
+            // Show branches for this flow
+            return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
+        }
 
-                $branchKey = $flowMatch['branch'] ?? null;
-                $redirectMessage = $lang === 'ar' ? 'جاري توجيهك للمسار المناسب...' : 'Redirecting to the appropriate path...';
+        if ($this->isSupportRequest($message, $lang)) {
+            $supportReply = $lang === 'ar'
+                ? 'يبدو أنك تحتاج إلى دعم بشري. إذا أردت، يمكنك إرسال مشكلة تفصيلية عبر نموذج الدعم أدناه.'
+                : 'It looks like you need human support. If you wish, you can send a detailed issue using the support form below.';
 
-                return response()->json([
-                    'reply' => $redirectMessage,
-                    'action' => 'navigate',
-                    'flow' => 'navigate',
-                    'flow_key' => $flowMatch['flow'],
-                    'branch_key' => $branchKey,
-                    'auto_redirect' => true
-                ]);
-            }
+            ChatbotLog::create([
+                'user_id' => $userId,
+                'user_email' => $userEmail,
+                'session_id' => $sessionId,
+                'sender' => 'bot',
+                'message' => $supportReply,
+                'language' => $lang,
+                'log_type' => 'chat',
+            ]);
 
-            // 3. التحقق من طلبات الدعم البشري المباشرة (تم إصلاحها وإعادتها)
-            if ($this->isSupportRequest($message, $lang)) {
-                $supportReply = $lang === 'ar'
-                    ? 'يبدو أنك تحتاج إلى دعم بشري. إذا أردت، يمكنك إرسال مشكلة تفصيلية عبر نموذج الدعم أدناه.'
-                    : 'It looks like you need human support. If you wish, you can send a detailed issue using the support form below.';
+            return response()->json(['reply' => $supportReply, 'flow' => 'ticket_prompt']);
+        }
 
-                try {
-                    DB::table('chatbot_logs')->insert([
-                        'user_id' => $userId,
-                        'user_email' => $userEmail,
-                        'session_id' => $sessionId,
-                        'sender' => 'bot',
-                        'message' => $supportReply,
-                        'language' => $lang,
-                        'log_type' => 'chat',
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                } catch (\Exception $logEx) {
-                    Log::warning('Failed to log support reply: ' . $logEx->getMessage());
-                }
+        $faqAnswer = $this->findFaqAnswer($message, $lang);
+        if ($faqAnswer !== null) {
+            ChatbotLog::create([
+                'user_id' => $userId,
+                'user_email' => $userEmail,
+                'session_id' => $sessionId,
+                'sender' => 'bot',
+                'message' => $faqAnswer,
+                'language' => $lang,
+                'log_type' => 'chat',
+            ]);
 
-                return response()->json(['reply' => $supportReply, 'flow' => 'ticket_prompt']);
-            }
+            return response()->json(['reply' => $faqAnswer, 'flow' => 'chat']);
+        }
 
-            // 4. البحث داخل بنك الأسئلة الشائعة (FAQ Answer)
-            $faqAnswer = $this->findFaqAnswer($message, $lang);
-            if ($faqAnswer !== null) {
-                try {
-                    DB::table('chatbot_logs')->insert([
-                        'user_id' => $userId,
-                        'user_email' => $userEmail,
-                        'session_id' => $sessionId,
-                        'sender' => 'bot',
-                        'message' => $faqAnswer,
-                        'language' => $lang,
-                        'log_type' => 'chat',
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                } catch (\Exception $logEx) {
-                    Log::warning('Failed to log FAQ answer: ' . $logEx->getMessage());
-                }
+        $botResponse = $this->generateBotResponse($message, $lang);
+        $replyText = $botResponse['reply'] ?? ($lang === 'ar'
+            ? 'أعتذر، لم أتمكن من الإجابة الآن. يمكنك استخدام الدعم الفني إذا كنت تحتاج مساعدة إضافية.'
+            : 'I’m sorry, I could not answer that right now. You can use support if you need additional help.');
+        $fallback = $botResponse['fallback'] ?? false;
 
-                return response()->json(['reply' => $faqAnswer, 'flow' => 'chat']);
-            }
+        if ($fallback) {
+            $this->storeUnhandledQuery($message, $lang, [
+                'session_id' => $sessionId,
+                'user_id' => $userId,
+            ]);
+        }
 
-            // 5. الاستعانة بـ ذكاء Gemini الاصطناعي لتوليد رد ذكي ومتناسق
-            $botResponse = $this->generateBotResponse($message, $lang);
-            $replyText = $botResponse['reply'] ?? ($lang === 'ar'
-                ? 'أعتذر، لم أتمكن من الإجابة الآن. يمكنك استخدام الدعم الفني إذا كنت تحتاج مساعدة إضافية.'
-                : 'I’m sorry, I could not answer that right now. You can use support if you need additional help.');
-            $fallback = $botResponse['fallback'] ?? false;
+        ChatbotLog::create([
+            'user_id' => $userId,
+            'user_email' => $userEmail,
+            'session_id' => $sessionId,
+            'sender' => 'bot',
+            'message' => $replyText,
+            'language' => $lang,
+            'log_type' => 'chat',
+        ]);
 
-            // إذا تعذر الفهم تماماً، نقوم بتسجيل الرسالة كـ Unhandled لتعلمها لاحقاً
-            if ($fallback) {
-                $this->storeUnhandledQuery($message, $lang, [
-                    'session_id' => $sessionId,
-                    'user_id' => $userId,
-                ]);
-            }
+        $responsePayload = [
+            'reply' => $replyText,
+            'fallback' => $fallback,
+            'flow' => $fallback ? 'ticket_prompt' : 'chat',
+        ];
 
-            try {
-                DB::table('chatbot_logs')->insert([
-                    'user_id' => $userId,
-                    'user_email' => $userEmail,
-                    'session_id' => $sessionId,
-                    'sender' => 'bot',
-                    'message' => $replyText,
-                    'language' => $lang,
-                    'log_type' => 'chat',
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
-            } catch (\Exception $logEx) {
-                Log::warning('Failed to log AI response: ' . $logEx->getMessage());
-            }
-
-            $responsePayload = [
-                'reply' => $replyText,
-                'fallback' => $fallback,
-                'flow' => $fallback ? 'ticket_prompt' : 'chat',
-            ];
-
-            return response()->json($responsePayload);
+        return response()->json($responsePayload);
         } catch (\Exception $exception) {
             Log::error('Chatbot request failed: ' . $exception->getMessage(), ['exception' => $exception]);
 
@@ -300,106 +236,6 @@ class ChatbotController extends Controller
         }
     }
 
-    /**
-     * دالة فحص الكلمات والروابط التي تم تعلمها تلقائياً وحفظها بقاعدة البيانات
-     */
-    private function detectLearnedFlowFromMessage(string $message, string $lang): ?array
-    {
-        try {
-            $normalized = trim(mb_strtolower($message));
-
-            $match = DB::table('chatbot_learned_keywords')
-                ->where('language', $lang)
-                ->where(function($query) use ($message, $normalized) {
-                    $query->where('keyword', $message)
-                          ->orWhere('normalized_keyword', $normalized);
-                })
-                ->first();
-
-            if ($match) {
-                return [
-                    'flow'            => $match->target_flow,
-                    'branch'          => $match->target_branch,
-                    'custom_response' => $match->custom_response,
-                ];
-            }
-        } catch (\Exception $e) {
-            Log::error('detectLearnedFlowFromMessage DB error: ' . $e->getMessage());
-        }
-
-        return null;
-    }
-
-    /**
-     * دالة فحص ومطابقة الكلمات الذكية مع المسارات الأساسية الافتراضية
-     */
-    private function detectFlowFromMessage(string $message, string $lang): ?array
-    {
-        $message = mb_strtolower($message);
-        if ($lang === 'ar') {
-            $message = $this->normalizeArabicText($message);
-        }
-
-        // خريطة تصنيف الكلمات المفتاحية التابعة للمسارات الـ 5 المتاحة بالنظام
-        $flowKeywords = [
-            'flow_1' => ['سمعة', 'المنصة', 'كيف يعمل', 'آلية العمل', 'العمل', 'reputation', 'concept', 'routing'],
-            'flow_2' => ['أسعار', 'الأسعار', 'باقات', 'خطة', 'اشتراك', 'lemon', 'pricing', 'plans', 'payment'],
-            'flow_3' => ['فرع', 'فروع', 'qr', 'كود', 'باركود', 'صلاحيات', 'setup', 'permissions'],
-            'flow_4' => ['مشاكل', 'صيانة', 'تفعيل', 'خطأ', 'تعطل', 'troubleshooting', 'alerts'],
-            'flow_5' => ['أمان', 'خصوصية', 'حماية', 'بيانات', 'security', 'privacy']
-        ];
-
-        foreach ($flowKeywords as $flowKey => $keywords) {
-            foreach ($keywords as $keyword) {
-                if (Str::contains($message, $keyword)) {
-                    return [
-                        'flow' => $flowKey,
-                        'branch' => null
-                    ];
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * دالة حفظ وتخزين الأسئلة غير المفهومة لإتاحتها للمراجعة والتعلم التلقائي لاحقاً
-     */
-    private function storeUnhandledQuery(string $message, string $language, array $context): void
-    {
-        try {
-            // التحقق من تكرار السؤال لزيادة عداد التكرار (Occurrences) في قاعدة البيانات
-            $existing = DB::table('chatbot_unhandled_queries')
-                ->where('query', $message)
-                ->where('language', $language)
-                ->where('status', 'pending')
-                ->first();
-
-            if ($existing) {
-                DB::table('chatbot_unhandled_queries')
-                    ->where('id', $existing->id)
-                    ->increment('occurrences');
-            } else {
-                DB::table('chatbot_unhandled_queries')->insert([
-                    'session_id' => $context['session_id'] ?? null,
-                    'user_id' => $context['user_id'] ?? null,
-                    'query' => $message,
-                    'language' => $language,
-                    'status' => 'pending',
-                    'occurrences' => 1,
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
-            }
-        } catch (\Exception $e) {
-            Log::warning('Failed to store unhandled query: ' . $e->getMessage());
-        }
-    }
-
-    /**
-     * البحث والمطابقة داخل مستودع الأسئلة الشائعة المحلي
-     */
     private function findFaqAnswer(string $message, string $language): ?string
     {
         $message = mb_strtolower($message);
@@ -425,20 +261,16 @@ class ChatbotController extends Controller
         return null;
     }
 
-    /**
-     * تنظيف وتبسيط الكلمات العربية لتجنب تعارض الأحرف وحساسية الصياغة
-     */
     private function normalizeArabicText(string $text): string
     {
         $search = ['أ', 'إ', 'آ', 'ى', 'ئ', 'ؤ', 'ة', 'ـ'];
         $replace = ['ا', 'ا', 'ا', 'ي', 'ي', 'و', 'ه', ''];
 
+        $text = str_replace(['أ', 'إ', 'آ', 'ى', 'ئ', 'ؤ', 'ة', 'ـ'], ['ا', 'ا', 'ا', 'ي', 'ي', 'و', 'ه', ''], $text);
+
         return str_replace($search, $replace, $text);
     }
 
-    /**
-     * فحص ما إذا كانت الرسالة تحتوي على كلمة مفتاحية محددة مع مراعاة طول الكلمات
-     */
     private function messageContainsKeyword(string $message, string $keyword, string $language): bool
     {
         $keyword = trim($keyword);
@@ -454,9 +286,6 @@ class ChatbotController extends Controller
         return Str::contains($message, $keyword);
     }
 
-    /**
-     * التحقق مما إذا كانت الرسالة الواردة عبارة عن تحية ترحيبية
-     */
     private function isGreeting(string $message, string $language): bool
     {
         $text = mb_strtolower($message);
@@ -476,28 +305,6 @@ class ChatbotController extends Controller
         return false;
     }
 
-    /**
-     * التحقق من طلبات الدعم البشري المباشرة
-     */
-    private function isSupportRequest(string $message, string $language): bool
-    {
-        $message = mb_strtolower($message);
-        $supportKeywords = $language === 'ar'
-            ? ['مساعدة', 'الدعم', 'بشري', 'تحدث مع', 'لا تعمل', 'لا يمكنني', 'contact support', 'طلب دعم']
-            : ['support', 'help', 'human', 'agent', 'cannot', 'can’t', 'not working', 'contact', 'ticket'];
-
-        foreach ($supportKeywords as $keyword) {
-            if (Str::contains($message, $keyword)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * مستودع الأسئلة والأجوبة الشائعة المحلي (FAQs)
-     */
     private function faqRepository(string $language): array
     {
         if ($language === 'ar') {
@@ -508,7 +315,7 @@ class ChatbotController extends Controller
                 ],
                 [
                     'keywords' => ['توجيه المشاعر', 'sentiment routing', 'المشاعر الذكية'],
-                    'answer' => 'التوجيه الذكي يفرّق الآراء: الإيجابية تُوجَّه لتقييمات Google، والسلبية تُحوَّل إلى شكاوى داخلية حتى يتم حلها بسرية.',
+                    'answer' => 'التوجيه الذكي يفرّق الآراء: الإيجابية تُوجَّه لتقييمات Google، والسلبية تُحوَّل إلى شكاوى داخلية حتى يتم حلها بسرية.',
                 ],
                 [
                     'keywords' => ['الباقات', 'خطة', 'خطط', 'سعر', 'تكلفة', 'أسعار', 'الأسعار', 'بكم', 'قديش', 'كم', 'اشتراكات', 'الاشتراكات', 'اشتراك', 'الاشتراك'],
@@ -547,7 +354,7 @@ class ChatbotController extends Controller
                     'answer' => 'عادةً التفعيل فوري. إن استمرت المشكلة أكثر من 5 دقائق، استخدم دعم البوت لإرسال رقم المعاملة لتفعيل يدوي سريع.',
                 ],
                 [
-                    'keywords' => ['تنبيهات', 'إيميل', 'شكاوى', 'بريد إلكتروني'],
+                    'keywords' => ['تنبيهات', 'إيميل', 'شكاوى', 'بريل'],
                     'answer' => 'تأكد من إعداد بريد مدير الفرع بشكل صحيح في صفحة الفريق وتحقق من صندوق الرسائل غير المرغوب فيها إذا لم يصل الإشعار.',
                 ],
                 [
@@ -621,13 +428,95 @@ class ChatbotController extends Controller
         ];
     }
 
-    /**
-     * دالة التواصل والاتصال بنموذج Gemini لتوليد إجابات ذكية وسريعة
-     */
+    private function getFlowKnowledgeBase(string $language): string
+    {
+        if ($language === 'ar') {
+            return <<<'AR'
+Root Menu:
+- Flow 1: التعرف على المنصة وآلية العمل الذكية.
+- Flow 2: الأسعار، الخطط، وتفاصيل الاشتراك والدفع.
+- Flow 3: إعداد الفروع، الـ QR، وصلاحيات الفريق.
+- Flow 4: حل المشاكل التقنية وتنبيهات الحساب.
+- Flow 5: أمان البيانات والتواصل المباشر مع الإدارة.
+
+Flow 1: التعرف على المنصة وآلية العمل الذكية:
+RevShieldra هو نظام ذكي مخصص للشركات متعددة الفروع لإدارة السمعة الرقمية من لوحة تحكم واحدة.
+العمل: يفرز التقييمات عبر مسح QR. العملاء الراضون (4-5 نجوم) يُوجَّهون تلقائيًا إلى Google Maps. العملاء غير الراضين (3 نجوم أو أقل) يُحتجزون في نموذج شكوى داخلي وسري لتصلك المشكلة دون أن يرى العميل روابط جوجل.
+
+Flow 2: الأسعار، الخطط، والاشتراك:
+باقة Starter مجانية لموقع واحد، باقة Growth Team 30$ شهريًا لثلاثة فروع (الشهر الأول مجاني)، وباقة Enterprise/Scale 65$ شهريًا لأكثر من 10 فروع.
+جميع الدفع الآمن يتم عبر Lemon Squeezy، والبدء الفوري يتم عن طريق Webhook يفتح الميزات تلقائيًا.
+يمكنك الترقية أو التخفيض أو الإلغاء في أي وقت من إعدادات الفواتير.
+
+Flow 3: إعداد الفروع، الـ QR، والصلاحيات:
+بمجرد إضافة الفرع وموقعه، ينشئ النظام رابطًا ورمز QR فريدين قابلين للتحميل والطباعة.
+الصفحات مخصصة بعلامتك التجارية، بما في ذلك الشعار والألوان.
+يمكنك توزيع صلاحيات الفريق بوضوح؛ كل مدير يرى تقارير وشكاوى فرعه فقط.
+
+Flow 4: حل المشاكل التقنية وحالات الحساب:
+إذا ظهرت صفحة صيانة أو غير متاحة مؤقتًا فذلك لحماية سمعتك عند انتهاء الاشتراك أو تجاوز الحدود. العميل لا يرى المشكلة الحقيقية، وأنت ترى تنبيهًا داخليًا للتجديد.
+إذا لم تظهر الميزات بعد الدفع، فإن التفعيل يكون عادةً فوريًا. في حالات نادرة، انتظر حتى 5 دقائق ثم افتح تذكرة دعم.
+تأكد من إعداد بريد كل مدير فرع في صفحة الفريق وتحقق من مجلد Spam إذا لم تصل التنبيهات.
+
+Flow 5: الأمان، الخصوصية والدعم البشري:
+بيانات العملاء والشكاوى محفوظة بأمان، ولا يتم مشاركتها أو بيعها لأي طرف خارجي. تُستخدم فقط لتسليم التقارير وتنبيهات فريقك.
+إذا تعذر على البوت الإجابة، اطلب دعم بشري عبر الزر المخصص، وسنرسل التذكرة إلى info.zaynix@gmail.com بسرعة.
+AR;
+        }
+
+        return <<<'EN'
+Root Menu:
+- Flow 1: Concept & smart routing.
+- Flow 2: Pricing, plans, subscription, and payment.
+- Flow 3: Setup, QR codes, and team permissions.
+- Flow 4: Troubleshooting and account alerts.
+- Flow 5: Security, privacy, and human fallback.
+
+Flow 1: Concept & Routing:
+RevShieldra is a smart reputation system for multi-location businesses managed from one dashboard.
+How it works: Reviews are categorized via QR scanning. Happy customers (4-5 stars) are routed to Google Maps. Unsatisfied feedback (3 stars or less) is captured into a private complaint form for branch managers without showing Google links.
+
+Flow 2: Pricing & Lemon Squeezy:
+Starter is free for one location, Growth Team is $30/mo for three locations with the first month free, and Enterprise/Scale is $65/mo for 10+ locations.
+Payments are secure through Lemon Squeezy, and a webhook instantly unlocks premium features in the dashboard.
+You can upgrade, downgrade, or cancel anytime from billing settings.
+
+Flow 3: Operations & Setup:
+After adding a branch and location, the system generates a unique link and QR code ready to download and print.
+Landing pages are fully brandable with your logo and colors.
+Team permissions can be assigned so each branch manager sees only their branch reports and complaints.
+
+Flow 4: Technical & Troubleshooting:
+A maintenance page appears when a subscription expires or branch limits are exceeded to protect your reputation. Customers see a routine update message while you get an internal renewal alert.
+Activation is usually instant. If features do not appear after payment, wait 5 minutes and submit a support ticket with the transaction details.
+Make sure branch managers' email addresses are correct and check spam/junk for complaint notifications.
+
+Flow 5: Security & Fallback:
+Customer and complaint data are stored securely and are not shared with external parties. They are used only for internal reporting and service operations.
+If the bot cannot answer, use the human support option to submit your issue. The ticket will be saved and sent to info.zaynix@gmail.com for fast response.
+EN;
+    }
+
+    private function isSupportRequest(string $message, string $language): bool
+    {
+        $message = mb_strtolower($message);
+        $supportKeywords = $language === 'ar'
+            ? ['مساعدة', 'الدعم', 'بشري', 'تحدث مع', 'لا تعمل', 'لا يمكنني', 'contact support', 'طلب دعم']
+            : ['support', 'help', 'human', 'agent', 'cannot', 'can’t', 'not working', 'contact', 'ticket'];
+
+        foreach ($supportKeywords as $keyword) {
+            if (Str::contains($message, $keyword)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function generateBotResponse(string $message, string $language): array
     {
         $systemPrompt = $language === 'ar'
-            ? "أنت المساعد الذكي الرسمي لـ RevShieldra. لديك قدرة فائقة على فهم اللهجات العربية والأخطاء الإملائية والتعبيرات العامية. إذا كان السؤال قريبًا من أي موضوع داخل الـ Flows الخمسة – مثل الأسعار، الاشتраكات، التفعيل، QR، إعداد الفروع، صلاحيات الفريق، التنبيهات، صفحة الصيانة، أو الأمان – فأجب مباشرةً دون إرسال المستخدم إلى الدعم البشري، حتى لو كانت الصياغة غير واضحة قليلاً. استخدم fallback=true فقط عندما يكون السؤال خارج نطاق Flows الخمسة تمامًا أو عندما يطلب المستخدم دعمًا بشريًا صريحًا. أجب فقط بصيغة JSON خام بدون أي أكواد أو شروحات إضافية. يجب أن يحتوي الناتج على الحقول: reply وfallback."
+            ? "أنت المساعد الذكي الرسمي لـ RevShieldra. لديك قدرة فائقة على فهم اللهجات العربية والأخطاء الإملائية والتعبيرات العامية. إذا كان السؤال قريبًا من أي موضوع داخل الـ Flows الخمسة – مثل الأسعار، الاشتراكات، التفعيل، QR، إعداد الفروع، صلاحيات الفريق، التنبيهات، صفحة الصيانة، أو الأمان – فأجب مباشرةً دون إرسال المستخدم إلى الدعم البشري، حتى لو كانت الصياغة غير واضحة قليلاً. استخدم fallback=true فقط عندما يكون السؤال خارج نطاق Flows الخمسة تمامًا أو عندما يطلب المستخدم دعمًا بشريًا صريحًا. أجب فقط بصيغة JSON خام بدون أي أكواد أو شروحات إضافية. يجب أن يحتوي الناتج على الحقول: reply وfallback."
             : "You are the official RevShieldra smart assistant. You have excellent NLP capability and understand dialects, typos, and similar-sounding phrases. If the question is close to any of the five Flows – like pricing, plans, activation, QR, branch setup, team permissions, alerts, maintenance page, or security – answer directly and do not send the user to human support, even if the wording is slightly unclear. Use fallback=true only when the question is clearly outside the five Flows or when the user explicitly asks for human support. Reply only in raw JSON with the fields reply and fallback.";
 
         $flowKnowledge = $this->getFlowKnowledgeBase($language);
@@ -638,8 +527,7 @@ class ChatbotController extends Controller
 
         if ($apiKey) {
             try {
-                $response = Http::timeout(12)
-                    ->withHeaders(['Content-Type' => 'application/json'])
+                $response = Http::timeout(12)->withHeaders(['Content-Type' => 'application/json'])
                     ->post("https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}", [
                         'contents' => [
                             [
@@ -665,22 +553,27 @@ class ChatbotController extends Controller
                     if (json_last_error() === JSON_ERROR_NONE && is_array($decoded) && isset($decoded['reply'])) {
                         return [
                             'reply' => trim($decoded['reply']),
-                            'fallback' => isset($decoded['fallback']) ? (bool) $decoded['fallback'] : false,
+                            'fallback' => isset($decoded['fallback']) ? (bool)$decoded['fallback'] : false,
                         ];
                     }
 
-                    // تنظيف أي علامات تظليل برمجية قد تنبثق مع الـ JSON بشكل آمن يمنع انقطاع مفسّر النصوص
-                    $cleaned = preg_replace('/^\x60\x60\x60(?:json)?\s*/i', '', trim($botText));
-                    $cleaned = preg_replace('/\s*\x60\x60\x60$/', '', $cleaned);
+                    $cleaned = preg_replace('/^```(?:json)?\s*/', '', trim($botText));
+                    $cleaned = preg_replace('/\s*```$/', '', $cleaned);
                     $decoded = json_decode($cleaned, true);
                     if (json_last_error() === JSON_ERROR_NONE && is_array($decoded) && isset($decoded['reply'])) {
                         return [
                             'reply' => trim($decoded['reply']),
-                            'fallback' => isset($decoded['fallback']) ? (bool) $decoded['fallback'] : false,
+                            'fallback' => isset($decoded['fallback']) ? (bool)$decoded['fallback'] : false,
                         ];
                     }
 
                     Log::warning('Chatbot Gemini returned invalid JSON response', ['text' => $botText]);
+                    return [
+                        'reply' => $language === 'ar'
+                            ? 'أعتذر، لم أفهم سؤالك بشكل كامل. يمكنك استخدام الدعم الفني أو العودة إلى القائمة الرئيسية.'
+                            : 'Sorry, I did not fully understand your question. You can use human support or return to the main menu.',
+                        'fallback' => true,
+                    ];
                 }
             } catch (\Exception $exception) {
                 Log::warning('Chatbot Gemini fallback: ' . $exception->getMessage());
@@ -696,39 +589,33 @@ class ChatbotController extends Controller
     }
 
     /**
-     * استدعاء وعرض القائمة الرئيسية (الـ Root Menu) بشكل آمن
+     * Handle showing root menu (flow action)
      */
     private function handleFlowAction(Request $request, string $sessionId, ?int $userId, ?string $userEmail, string $lang): \Illuminate\Http\JsonResponse
     {
         $flows = ChatbotFlowService::getFlows($lang);
         $rootMessage = $flows['root']['message'];
 
-        try {
-            DB::table('chatbot_logs')->insert([
-                'user_id' => $userId,
-                'user_email' => $userEmail,
-                'session_id' => $sessionId,
-                'sender' => 'bot',
-                'message' => $rootMessage,
-                'language' => $lang,
-                'log_type' => 'chat',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-        } catch (\Exception $logEx) {
-            Log::warning('Failed to log flow action: ' . $logEx->getMessage());
-        }
+        ChatbotLog::create([
+            'user_id' => $userId,
+            'user_email' => $userEmail,
+            'session_id' => $sessionId,
+            'sender' => 'bot',
+            'message' => $rootMessage,
+            'language' => $lang,
+            'log_type' => 'chat',
+        ]);
 
         return response()->json([
             'reply' => $rootMessage,
             'flow' => 'root',
-            'show_menu' => $this->getSafeRootMenu($lang),
+            'show_menu' => ChatbotFlowService::getRootMenu($lang),
             'message_type' => 'separator'
         ]);
     }
 
     /**
-     * معالجة وتفريع التنقل بين الـ Branches والـ Flows المتاحة بشكل آمن تماماً
+     * Handle navigating to a flow branch
      */
     private function handleNavigateAction(Request $request, string $sessionId, ?int $userId, ?string $userEmail, string $lang): \Illuminate\Http\JsonResponse
     {
@@ -742,169 +629,435 @@ class ChatbotController extends Controller
             ], 400);
         }
 
+        // Case 1: Only flow_key provided - return list of branches
+        if (!$branchKey) {
+            $flows = ChatbotFlowService::getFlows($lang);
+            $flowData = $flows['root']['flows'][$flowKey] ?? null;
+
+            if (!$flowData) {
+                return response()->json([
+                    'error' => true,
+                    'message' => $lang === 'ar' ? 'المسار غير موجود.' : 'Flow not found.'
+                ], 404);
+            }
+
+            $branches = $flowData['branches'] ?? [];
+            $branchList = [];
+            foreach ($branches as $key => $branch) {
+                $branchList[$key] = [
+                    'label' => $branch['label'],
+                    'category' => $branch['category'] ?? 'general'
+                ];
+            }
+
+            return response()->json([
+                'reply' => $flowData['label'],
+                'flow' => 'flow_menu',
+                'flow_key' => $flowKey,
+                'branches' => $branchList,
+                'message_type' => 'branch_list'
+            ]);
+        }
+
+        // Case 2: Both flow_key and branch_key provided - return full branch response
+        $branches = ChatbotFlowService::getFlowBranches($lang, $flowKey);
+        if (!isset($branches[$branchKey])) {
+            return response()->json([
+                'error' => true,
+                'message' => $lang === 'ar' ? 'المسار غير موجود.' : 'Branch not found.'
+            ], 404);
+        }
+
+        $branch = $branches[$branchKey];
+        $response = $branch['response'];
+        $category = $branch['category'] ?? 'general';
+
+        ChatbotLog::create([
+            'user_id' => $userId,
+            'user_email' => $userEmail,
+            'session_id' => $sessionId,
+            'sender' => 'user',
+            'message' => $branchKey,
+            'language' => $lang,
+            'log_type' => 'flow_navigation',
+            'metadata' => json_encode(['flow' => $flowKey, 'branch' => $branchKey, 'category' => $category])
+        ]);
+
+        ChatbotLog::create([
+            'user_id' => $userId,
+            'user_email' => $userEmail,
+            'session_id' => $sessionId,
+            'sender' => 'bot',
+            'message' => $response,
+            'language' => $lang,
+            'log_type' => 'chat',
+            'metadata' => json_encode(['flow' => $flowKey, 'branch' => $branchKey, 'category' => $category])
+        ]);
+
+        // Store flow context in session for later use with tickets
+        if ($session = session()) {
+            $session->put("chatbot_flow_{$sessionId}", [
+                'flow' => $flowKey,
+                'branch' => $branchKey,
+                'category' => $category
+            ]);
+        }
+
+        // Get flow tree to find sub options
+        $flows = ChatbotFlowService::getFlows($lang);
+        $branchData = $flows['root']['flows'][$flowKey]['branches'][$branchKey] ?? null;
+        $subOptions = $branchData['sub_options'] ?? [];
+
+        return response()->json([
+            'reply' => $response,
+            'flow' => 'branch',
+            'flow_key' => $flowKey,
+            'branch_key' => $branchKey,
+            'category' => $category,
+            'sub_options' => $subOptions,
+            'message_type' => 'branch_answer'
+        ]);
+    }
+
+    /**
+     * Handle back navigation
+     */
+    private function handleBackAction(Request $request, string $sessionId, ?int $userId, ?string $userEmail, string $lang): \Illuminate\Http\JsonResponse
+    {
+        $level = $request->input('level', 'root'); // 'root' or 'flow'
+
+        if ($level === 'root') {
+            return $this->handleFlowAction($request, $sessionId, $userId, $userEmail, $lang);
+        }
+
+        // Go back to flow menu from branch
+        $flowKey = $request->input('flow_key');
+        if (!$flowKey) {
+            return $this->handleFlowAction($request, $sessionId, $userId, $userEmail, $lang);
+        }
+
         $flows = ChatbotFlowService::getFlows($lang);
         $flowData = $flows['root']['flows'][$flowKey] ?? null;
 
         if (!$flowData) {
-            return response()->json([
-                'error' => true,
-                'message' => $lang === 'ar' ? 'المسار غير موجود.' : 'Flow not found.'
-            ], 404);
+            return $this->handleFlowAction($request, $sessionId, $userId, $userEmail, $lang);
         }
 
-        // إذا كان هناك اختيار لفرع محدد (Branch Key)
-        if ($branchKey) {
-            $branchData = $flowData['branches'][$branchKey] ?? null;
-            if ($branchData) {
-                $responseMessage = $branchData['response'] ?? '';
-                
-                return response()->json([
-                    'reply' => $responseMessage,
-                    'flow' => $flowKey,
-                    'show_menu' => $this->getSafeBranchMenu($flowKey, $lang)
-                ]);
-            }
+        $flowLabel = $flowData['label'];
+        $branches = [];
+
+        foreach ($flowData['branches'] as $key => $branch) {
+            $branches[$key] = [
+                'label' => $branch['label']
+            ];
         }
+
+        $message = $lang === 'ar'
+            ? "⬅️ رجعت إلى القائمة الفرعية: **{$flowLabel}**\n\nاختر أحد الخيارات التالية:"
+            : "⬅️ Back to: **{$flowLabel}**\n\nChoose one of the options below:";
+
+        ChatbotLog::create([
+            'user_id' => $userId,
+            'user_email' => $userEmail,
+            'session_id' => $sessionId,
+            'sender' => 'bot',
+            'message' => $message,
+            'language' => $lang,
+            'log_type' => 'chat',
+            'metadata' => json_encode(['action' => 'back', 'flow' => $flowKey])
+        ]);
 
         return response()->json([
-            'reply' => $flowData['message'] ?? '',
-            'flow' => $flowKey,
-            'show_menu' => $this->getSafeBranchMenu($flowKey, $lang)
+            'reply' => $message,
+            'flow' => 'flow_menu',
+            'flow_key' => $flowKey,
+            'branches' => $branches,
+            'message_type' => 'separator'
         ]);
     }
 
     /**
-     * دالة دمج وبناء الـ Root Menu بشكل آمن حتى لو كانت دالة getRootMenu غير معرّفة بالـ Service
+     * Override ticket submission to include flow context
      */
-    private function getSafeRootMenu(string $lang): array
+    private function submitTicketWithContext(Request $request, string $sessionId, ?int $userId, ?string $userEmail, string $lang): \Illuminate\Http\JsonResponse
     {
-        if (method_exists(ChatbotFlowService::class, 'getRootMenu')) {
-            return ChatbotFlowService::getRootMenu($lang);
-        }
+        $emailInput = $request->input('email');
+        $issueContent = $request->input('message');
+        $nameInput = $request->input('name', $request->input('email'));
+        $category = $request->input('category', 'general');
 
-        $flows = ChatbotFlowService::getFlows($lang);
-        $menu = [];
-        $rootFlows = $flows['root']['flows'] ?? [];
-        foreach ($rootFlows as $flowKey => $flow) {
-            $menu[] = [
-                'action' => 'navigate',
-                'label' => $flow['label'] ?? $flowKey,
-                'flow_key' => $flowKey,
-                'branch_key' => null,
-            ];
+        // Get flow context if exists
+        $flowContext = ($s = session()) ? $s->get("chatbot_flow_{$sessionId}", []) : [];
+
+        ChatbotLog::create([
+            'user_id' => $userId,
+            'user_email' => $emailInput,
+            'session_id' => $sessionId,
+            'sender' => 'user',
+            'message' => "Support ticket submitted: {$issueContent}",
+            'language' => $lang,
+            'log_type' => 'ticket_request',
+            'metadata' => json_encode(['category' => $category, 'flow_context' => $flowContext])
+        ]);
+
+        $ticketData = [
+            'name' => $nameInput,
+            'email' => $emailInput,
+            'issue' => $issueContent,
+            'is_logged_in' => auth()->check(),
+            'category' => $category,
+            'flow_context' => $flowContext,
+        ];
+
+        try {
+            Mail::to('info.zaynix@gmail.com')->send(new SupportTicketMail($ticketData));
+
+            $botReply = $lang === 'ar'
+                ? 'تم استلام طلبك بنجاح، وسيتواصل معنا فريق الدعم الفني معك عبر البريد الإلكتروني قريبًا.'
+                : 'Your support request has been received successfully. Our team will contact you shortly via email.';
+
+            ChatbotLog::create([
+                'user_id' => $userId,
+                'user_email' => $userEmail,
+                'session_id' => $sessionId,
+                'sender' => 'bot',
+                'message' => $botReply,
+                'language' => $lang,
+                'log_type' => 'chat',
+            ]);
+
+            return response()->json(['reply' => $botReply, 'flow' => 'end']);
+        } catch (\Exception $exception) {
+            Log::error('Chatbot ticket email failed: ' . $exception->getMessage());
+
+            return response()->json([
+                'reply' => $lang === 'ar'
+                    ? 'عذراً، حدث خطأ أثناء إرسال التذكرة. الرجاء المحاولة لاحقًا أو الاتصال مباشرة عبر info.zaynix@gmail.com.'
+                    : 'Sorry, there was an error sending your ticket. Please try again later or contact info.zaynix@gmail.com directly.',
+            ], 500);
         }
-        return $menu;
     }
 
-    /**
-     * دالة دمج وبناء الـ Branch Menu تلقائياً وحماية السيرفر من أي نقص دوال في الـ Service
-     */
-    private function getSafeBranchMenu(string $flowKey, string $lang): array
+    private function detectLearnedFlowFromMessage(string $message, string $language): ?array
     {
-        if (method_exists(ChatbotFlowService::class, 'getBranchMenu')) {
-            return ChatbotFlowService::getBranchMenu($flowKey, $lang);
+        $normalizedMessage = $this->normalizeLearningText($message, $language);
+        if ($normalizedMessage === '') {
+            return null;
         }
 
-        $flows = ChatbotFlowService::getFlows($lang);
-        $flowData = $flows['root']['flows'][$flowKey] ?? null;
-        $menu = [];
+        $learnedKeywords = ChatbotLearnedKeyword::query()
+            ->where('language', $language)
+            ->orderByRaw('LENGTH(normalized_keyword) DESC')
+            ->limit(200)
+            ->get();
 
-        if ($flowData) {
-            $branches = $flowData['branches'] ?? [];
-            foreach ($branches as $branchKey => $branch) {
-                $menu[] = [
-                    'action' => 'navigate',
-                    'label' => $branch['label'] ?? $branchKey,
-                    'flow_key' => $flowKey,
-                    'branch_key' => $branchKey,
+        foreach ($learnedKeywords as $learnedKeyword) {
+            $keyword = (string) $learnedKeyword->normalized_keyword;
+
+            if ($keyword === '') {
+                continue;
+            }
+
+            if ($normalizedMessage === $keyword || Str::contains($normalizedMessage, $keyword)) {
+                $learnedKeyword->forceFill(['last_used_at' => now()])->save();
+
+                return [
+                    'flow' => $learnedKeyword->target_flow,
+                    'branch' => $learnedKeyword->target_branch,
+                    'custom_response' => $learnedKeyword->custom_response,
+                    'source' => 'learned_keyword',
+                    'keyword' => $learnedKeyword->keyword,
                 ];
             }
         }
 
-        // إضافة زر الرجوع الدائم لتوفير تجربة مستخدم مثالية
-        $menu[] = [
-            'action' => 'back',
-            'label' => $lang === 'ar' ? '⬅️ العودة للقائمة الرئيسية' : '⬅️ Back to Main Menu',
-            'flow_key' => null,
-            'branch_key' => null,
-        ];
-
-        return $menu;
+        return null;
     }
 
-    /**
-     * دالة الرجوع خطوة للخلف للعودة للقائمة الرئيسية
-     */
-    private function handleBackAction(Request $request, string $sessionId, ?int $userId, ?string $userEmail, string $lang): \Illuminate\Http\JsonResponse
+    private function storeUnhandledQuery(string $message, string $language, array $metadata = []): void
     {
-        return $this->handleFlowAction($request, $sessionId, $userId, $userEmail, $lang);
-    }
+        $normalizedMessage = $this->normalizeLearningText($message, $language);
 
-    /**
-     * استقبال وحفظ تذاكر الدعم الفني
-     */
-    private function submitTicketWithContext(Request $request, string $sessionId, ?int $userId, ?string $userEmail, string $lang): \Illuminate\Http\JsonResponse
-    {
-        return response()->json([
-            'reply' => $lang === 'ar' ? 'تم استلام تذكرتك بنجاح، وسنتواصل معك قريباً.' : 'Your ticket has been received successfully.',
-            'flow' => 'chat'
-        ]);
-    }
-
-    /**
-     * مستودع المعرفة للـ Flows الخمسة لتمريرها إلى Gemini
-     */
-    private function getFlowKnowledgeBase(string $language): string
-    {
-        if ($language === 'ar') {
-            return "Root Menu:\n" .
-                "- Flow 1: التعرف على المنصة وآلية العمل الذكية.\n" .
-                "- Flow 2: الأسعار، الخطط، وتفاصيل الاشتراك والدفع.\n" .
-                "- Flow 3: إعداد الفروع، الـ QR، وصلاحيات الفريق.\n" .
-                "- Flow 4: حل المشاكل التقنية وتنبيهات الحساب.\n" .
-                "- Flow 5: أمان البيانات والتواصل المباشر مع الإدارة.\n\n" .
-                "Flow 1: التعرف على المنصة وآلية العمل الذكية:\n" .
-                "RevShieldra هو نظام ذكي مخصص للشركات متعددة الفروع لإدارة السمعة الرقمية من لوحة تحكم واحدة.\n" .
-                "العمل: يفرز التقييمات عبر مسح QR. العملاء الراضون (4-5 نجوم) يُوجَّهون تلقائيًا إلى Google Maps. العملاء غير الراضين (3 نجوم أو أقل) يُحتجزون في نموذج شكوى داخلي وسري لتصلك المشكلة دون أن يرى العميل روابط جوجل.\n\n" .
-                "Flow 2: الأسعار، الخطط، والاشتراك:\n" .
-                "باقة Starter مجانية لموقع واحد، باقة Growth Team 30$ شهرياً لثلاثة فروع (الشهر الأول مجاني)، وباقة Enterprise/Scale 65$ شهرياً لأكثر من 10 فروع.\n" .
-                "جميع الدفع الآمن يتم عبر Lemon Squeezy، والبدء الفوري يتم عن طريق Webhook يفتح الميزات تلقائياً.\n" .
-                "يمكنك الترقية أو التخفيض أو الإلغاء في أي وقت من إعدادات الفواتير.\n\n" .
-                "Flow 3: إعداد الفروع، الـ QR، والصلاحيات:\n" .
-                "بمجرد إضافة الفرع وموقعه، ينشئ النظام رابطاً ورمز QR فريداً قابلين للتحميل والطباعة.\n" .
-                "الصفحات مخصصة بعلامتك التجارية، بما في ذلك الشعار والألوان.\n" .
-                "يمكنك توزيع صلاحيات الفريق بوضوح؛ كل مدير يرى تقارير وشكاوى فرعه فقط.\n\n" .
-                "Flow 4: حل المشاكل التقنية وحالات الحساب:\n" .
-                "إذا ظهرت صفحة صيانة أو غير متاحة مؤقتاً فذلك لحماية سمعتك عند انتهاء الاشتراك أو تجاوز الحدود. العميل لا يرى المشكلة الحقيقية، وأنت ترى تنبيهاً داخلياً للتجديد.\n" .
-                "إذا لم تظهر الميزات بعد الدفع، فإن التفعيل يكون عادةً فورياً. في حالات نادرة، انتظر حتى 5 دقائق ثم افتح تذكرة دعم.\n" .
-                "تأكد من إعداد بريد كل مدير فرع في صفحة الفريق وتحقق من مجلد Spam إذا لم تصل التنبيهات.\n\n" .
-                "Flow 5: الأمان، الخصوصية والدعم البشري:\n" .
-                "بيانات العملاء والشكاوى محفوظة بأمان، ولا يتم مشاركتها أو بيعها لأي طرف خارجي. تُستخدم فقط لتسليم التقارير وتنبيهات فريقك.";
+        if (mb_strlen($normalizedMessage) < 3) {
+            return;
         }
 
-        return "Root Menu:\n" .
-            "- Flow 1: Concept & smart routing.\n" .
-            "- Flow 2: Pricing, plans, subscription, and payment.\n" .
-            "- Flow 3: Setup, QR codes, and team permissions.\n" .
-            "- Flow 4: Troubleshooting and account alerts.\n" .
-            "- Flow 5: Security, privacy, and human fallback.\n\n" .
-            "Flow 1: Concept & Routing:\n" .
-            "RevShieldra is a smart reputation system for multi-location businesses managed from one dashboard.\n" .
-            "How it works: Reviews are categorized via QR scanning. Happy customers (4-5 stars) are routed to Google Maps. Unsatisfied feedback (3 stars or less) is captured into a private complaint form for branch managers without showing Google links.\n\n" .
-            "Flow 2: Pricing & Lemon Squeezy:\n" .
-            "Starter is free for one location, Growth Team is $30/mo for three locations with the first month free, and Enterprise/Scale is $65/mo for 10+ locations.\n" .
-            "Payments are secure through Lemon Squeezy, and a webhook instantly unlocks premium features in the dashboard.\n" .
-            "You can upgrade, downgrade, or cancel anytime from billing settings.\n\n" .
-            "Flow 3: Operations & Setup:\n" .
-            "How it works: When you add a branch, the system generates a unique link and QR code for that location, ready to print and use immediately.\n" .
-            "Landing pages are fully brandable with your logo and colors.\n" .
-            "Team permissions can be assigned so each branch manager sees only their branch reports and complaints.\n\n" .
-            "Flow 4: Technical & Troubleshooting:\n" .
-            "A maintenance page appears when a subscription expires or branch limits are exceeded to protect your reputation. Customers see a routine update message while you get an internal renewal alert.\n" .
-            "Activation is usually instant. If features do not appear after payment, wait 5 minutes and submit a support ticket with the transaction details.\n" .
-            "Make sure branch managers' email addresses are correct and check spam/junk for complaint notifications.\n\n" .
-            "Flow 5: Security & Fallback:\n" .
-            "Customer and complaint data are stored securely and are not shared with external parties. They are used only for internal reporting and service operations.\n" .
-            "If the bot cannot answer, use the human support option to submit your issue. The ticket will be saved and sent to info.zaynix@gmail.com for fast response.";
+        try {
+            $query = ChatbotUnhandledQuery::firstOrNew([
+                'language' => $language,
+                'normalized_query' => mb_substr($normalizedMessage, 0, 500),
+            ]);
+
+            $query->query = $message;
+            $query->status = 'pending';
+            $query->last_seen_at = now();
+            $query->metadata = array_filter($metadata, fn ($value) => $value !== null);
+
+            if ($query->exists) {
+                $query->occurrences = $query->occurrences + 1;
+            }
+
+            $query->save();
+        } catch (\Throwable $exception) {
+            Log::warning('Failed to store chatbot unhandled query: ' . $exception->getMessage());
+        }
+    }
+
+    private function normalizeLearningText(string $text, string $language): string
+    {
+        $text = trim(mb_strtolower($text));
+
+        if ($language === 'ar') {
+            $text = str_replace(['أ', 'إ', 'آ', 'ى', 'ئ', 'ؤ', 'ة', 'ـ'], ['ا', 'ا', 'ا', 'ي', 'ي', 'و', 'ه', ''], $text);
+        }
+
+        return Str::squish($text);
+    }
+
+    /**
+     * Detect which flow the user's message matches
+     * Returns array with 'flow' and optional 'branch' keys if matched
+     */
+    private function detectFlowFromMessage(string $message, string $language): ?array
+    {
+        $message = mb_strtolower($message);
+        if ($language === 'ar') {
+            $message = str_replace(['أ', 'إ', 'آ', 'ى', 'ئ', 'ؤ', 'ة', 'ـ'], ['ا', 'ا', 'ا', 'ي', 'ي', 'و', 'ه', ''], $message);
+            $message = $this->normalizeArabicText($message);
+        }
+
+        $directMatches = $language === 'ar' ? [
+            'platform' => [
+                'about' => ['كيف بتشتغل منصتكم', 'كيف تشتغل منصتكم', 'كيف تعمل منصتكم', 'كيف المنصه بتشتغل', 'كيف المنصة بتشتغل', 'كيف بتشتغل المنصه', 'كيف بتشتغل المنصة', 'كيف يعمل النظام', 'اشرح المنصه', 'اشرح المنصة'],
+                'smart_routing' => ['كيف بتوجه التقييمات', 'كيف توجه التقييمات', 'كيف تمنع التقييم السلبي', 'كيف فلتره التقييمات'],
+            ],
+        ] : [
+            'platform' => [
+                'about' => ['how does your platform work', 'how does the platform work', 'how revshieldra works'],
+                'smart_routing' => ['how review gating works', 'how smart routing works'],
+            ],
+        ];
+
+        foreach ($directMatches as $flowKey => $branches) {
+            foreach ($branches as $branchKey => $keywords) {
+                foreach ($keywords as $keyword) {
+                    $normalizedKeyword = mb_strtolower($keyword);
+                    if ($language === 'ar') {
+                        $normalizedKeyword = str_replace(['أ', 'إ', 'آ', 'ى', 'ئ', 'ؤ', 'ة', 'ـ'], ['ا', 'ا', 'ا', 'ي', 'ي', 'و', 'ه', ''], $normalizedKeyword);
+                    }
+
+                    if ($this->messageContainsKeyword($message, $normalizedKeyword, $language)) {
+                        return ['flow' => $flowKey, 'branch' => $branchKey];
+                    }
+                }
+            }
+        }
+
+        $branchKeywords = $language === 'ar' ? [
+            'pricing' => [
+                'plans' => ['سعر', 'اسعار', 'باقات', 'باقة', 'خطة', 'خطط', 'اشتراك', 'تكلفة', 'بكم', 'قديش', 'مجاني', 'basic', 'pro'],
+                'payment' => ['دفع', 'بطاقة', 'فاتورة', 'تجديد', 'خصم', 'بوابة الدفع', 'lemon'],
+                'upgrade' => ['ترقية', 'الغاء', 'إلغاء', 'خفض', 'تغيير الخطة', 'cancel', 'upgrade'],
+            ],
+            'platform' => [
+                'about' => ['ما هي', 'شو هي', 'revshieldra', 'المنصة', 'النظام', 'مميزات', 'اشرح'],
+                'smart_routing' => ['توجيه', 'مشاعر', 'فلترة', 'review gating', 'تقييم سلبي', 'تقييم ايجابي', 'google reviews'],
+            ],
+            'setup' => [
+                'create_branch' => ['فرع', 'اضافة فرع', 'إنشاء فرع', 'انشاء فرع', 'موقع', 'location'],
+                'qr_generation' => ['qr', 'كيو ار', 'باركود', 'رمز', 'كود', 'مسح', 'scan'],
+                'branch_limits' => ['حدود الفروع', 'كم فرع', 'عدد الفروع', 'فروع الخطة'],
+            ],
+            'security' => [
+                'data_protection' => ['امان', 'أمان', 'حماية', 'خصوصية', 'تشفير', 'بيانات العملاء'],
+                'data_retention' => ['حذف البيانات', 'نسخ احتياطي', 'backup', 'احتفاظ', 'اغلاق الحساب'],
+            ],
+            'troubleshooting' => [
+                'billing_issues' => ['مشكلة دفع', 'فاتورة', 'الدفع ما اشتغل', 'بعد الدفع', 'لم تتفعل', 'لم تظهر الميزات', 'billing'],
+                'technical_issues' => ['خطأ', 'error', '400', 'failed to load', 'لا يعمل', 'ما بشتغل', 'بطيء', 'خلل', 'الرابط لا يعمل', 'qr لا يعمل'],
+            ],
+        ] : [
+            'pricing' => [
+                'plans' => ['price', 'pricing', 'plan', 'plans', 'subscription', 'package', 'cost', 'how much', 'free', 'basic', 'pro'],
+                'payment' => ['payment', 'card', 'billing', 'invoice', 'renewal', 'charge', 'lemon'],
+                'upgrade' => ['upgrade', 'downgrade', 'cancel', 'change plan'],
+            ],
+            'platform' => [
+                'about' => ['what is', 'revshieldra', 'platform', 'features', 'explain', 'purpose'],
+                'smart_routing' => ['smart routing', 'review gating', 'sentiment', 'negative review', 'positive review', 'google reviews'],
+            ],
+            'setup' => [
+                'create_branch' => ['branch', 'create branch', 'location', 'add location'],
+                'qr_generation' => ['qr', 'code', 'barcode', 'scan'],
+                'branch_limits' => ['branch limit', 'limits', 'how many branches', 'locations limit'],
+            ],
+            'security' => [
+                'data_protection' => ['security', 'safe', 'privacy', 'encrypt', 'customer data'],
+                'data_retention' => ['delete data', 'backup', 'retention', 'close account'],
+            ],
+            'troubleshooting' => [
+                'billing_issues' => ['billing issue', 'payment issue', 'invoice issue', 'plan did not update', 'charged'],
+                'technical_issues' => ['problem', 'error', '400', 'failed to load', 'not working', 'bug', 'slow', 'link error', 'qr not working'],
+            ],
+        ];
+
+        $bestMatch = null;
+        $bestScore = 0;
+
+        foreach ($branchKeywords as $flowKey => $branches) {
+            foreach ($branches as $branchKey => $keywords) {
+                $score = 0;
+                foreach ($keywords as $keyword) {
+                    $normalizedKeyword = mb_strtolower($keyword);
+                    if ($language === 'ar') {
+                        $normalizedKeyword = $this->normalizeArabicText($normalizedKeyword);
+                    }
+
+                    if ($this->messageContainsKeyword($message, $normalizedKeyword, $language)) {
+                        $score += mb_strlen($normalizedKeyword) > 8 ? 2 : 1;
+                    }
+                }
+
+                if ($score > $bestScore) {
+                    $bestScore = $score;
+                    $bestMatch = ['flow' => $flowKey, 'branch' => $branchKey];
+                }
+            }
+        }
+
+        if ($bestMatch) {
+            return $bestMatch;
+        }
+
+        // Define flow keywords
+        $flowKeywords = $language === 'ar' ? [
+            'pricing' => ['سعر', 'خطة', 'اشتراك', 'باقة', 'تكلفة', 'الاشتراك', 'الخطط', 'بكم', 'قديش', 'كم السعر', 'الأسعار', 'الباقات', 'دفع', 'بيانات البطاقة', 'فاتورة', 'الدفع', 'ترقية', 'إلغاء', 'خفض الخطة'],
+            'platform' => ['كيف يعمل', 'اشرح', 'كيفية العمل', 'مميزات', 'المنصة', 'revshieldra', 'الهدف', 'ما هي', 'نظام', 'آلية'],
+            'setup' => ['فرع', 'branch', 'qr', 'رمز', 'كود', 'باركود', 'إضافة فرع', 'إنشاء فرع', 'الفروع', 'روابط', 'الروابط', 'فريق', 'مدراء', 'صلاحيات'],
+            'security' => ['أمان', 'بيانات', 'خصوصية', 'حماية', 'تشفير', 'آمن', 'الخصوصية', 'حذف البيانات', 'النسخ الاحتياطي'],
+            'troubleshooting' => ['مشكلة', 'خطأ', 'error', 'لا يعمل', 'صيانة', 'مسحت', 'توقفت', 'خلل', 'بطيء', 'لم تظهر الميزات', 'ما اشتغل']
+        ] : [
+            'pricing' => ['price', 'pricing', 'plan', 'subscription', 'package', 'cost', 'plans', 'how much', 'payment', 'card', 'billing', 'invoice', 'upgrade', 'downgrade', 'cancel'],
+            'platform' => ['how', 'explain', 'how it works', 'feature', 'features', 'revshieldra', 'what is', 'purpose', 'system', 'works'],
+            'setup' => ['branch', 'qr', 'code', 'barcode', 'create branch', 'locations', 'links', 'team', 'manager', 'permission'],
+            'security' => ['security', 'data', 'privacy', 'safe', 'encrypt', 'delete', 'backup', 'safe'],
+            'troubleshooting' => ['problem', 'error', 'not working', 'maintenance', 'issue', 'bug', 'slow', 'failed', 'doesn\'t work', 'failed to load']
+        ];
+
+        foreach ($flowKeywords as $flowKey => $keywords) {
+            foreach ($keywords as $keyword) {
+                $normalizedKeyword = mb_strtolower($keyword);
+                if ($language === 'ar') {
+                    $normalizedKeyword = $this->normalizeArabicText($normalizedKeyword);
+                }
+
+                if ($this->messageContainsKeyword($message, $normalizedKeyword, $language)) {
+                    return ['flow' => $flowKey];
+                }
+            }
+        }
+
+        return null;
     }
 }
+
