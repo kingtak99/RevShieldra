@@ -3,9 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Mail\SupportTicketMail;
-use App\Models\ChatbotLearnedKeyword;
 use App\Models\ChatbotLog;
-use App\Models\ChatbotUnhandledQuery;
 use App\Services\ChatbotFlowService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -60,16 +58,22 @@ class ChatbotController extends Controller
 
             $message = $request->input('message');
 
-            // حفظ رسالة المستخدم في اللوج
-            ChatbotLog::create([
-                'user_id' => $userId,
-                'user_email' => $userEmail,
-                'session_id' => $sessionId,
-                'sender' => 'user',
-                'message' => $message,
-                'language' => $lang,
-                'log_type' => 'chat',
-            ]);
+            // حفظ رسالة المستخدم في اللوج بشكل آمن باستخدام الـ DB Builder لتفادي انهيار الموديل
+            try {
+                DB::table('chatbot_logs')->insert([
+                    'user_id' => $userId,
+                    'user_email' => $userEmail,
+                    'session_id' => $sessionId,
+                    'sender' => 'user',
+                    'message' => $message,
+                    'language' => $lang,
+                    'log_type' => 'chat',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } catch (\Exception $logEx) {
+                Log::warning('Failed to log user message: ' . $logEx->getMessage());
+            }
 
             // التحقق مما إذا كانت الرسالة عبارة عن ترحيب
             if ($this->isGreeting($message, $lang)) {
@@ -77,15 +81,21 @@ class ChatbotController extends Controller
                     ? 'أهلاً بك! يمكنك اختيار أحد المسارات التالية للحصول على إجابة دقيقة وسريعة.'
                     : 'Welcome! Please choose one of the paths below for an accurate answer.';
 
-                ChatbotLog::create([
-                    'user_id' => $userId,
-                    'user_email' => $userEmail,
-                    'session_id' => $sessionId,
-                    'sender' => 'bot',
-                    'message' => $greetingReply,
-                    'language' => $lang,
-                    'log_type' => 'chat',
-                ]);
+                try {
+                    DB::table('chatbot_logs')->insert([
+                        'user_id' => $userId,
+                        'user_email' => $userEmail,
+                        'session_id' => $sessionId,
+                        'sender' => 'bot',
+                        'message' => $greetingReply,
+                        'language' => $lang,
+                        'log_type' => 'chat',
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                } catch (\Exception $logEx) {
+                    Log::warning('Failed to log greeting reply: ' . $logEx->getMessage());
+                }
 
                 return response()->json([
                     'reply' => $greetingReply,
@@ -97,16 +107,22 @@ class ChatbotController extends Controller
             // 1. فحص الكلمات والمسارات التي تم تعلمها تلقائياً (Learned Flows)
             $learnedFlowMatch = $this->detectLearnedFlowFromMessage($message, $lang);
             if ($learnedFlowMatch) {
-                ChatbotLog::create([
-                    'user_id' => $userId,
-                    'user_email' => $userEmail,
-                    'session_id' => $sessionId,
-                    'sender' => 'bot',
-                    'message' => 'Learned flow detection triggered',
-                    'language' => $lang,
-                    'log_type' => 'flow_detection',
-                    'metadata' => json_encode($learnedFlowMatch),
-                ]);
+                try {
+                    DB::table('chatbot_logs')->insert([
+                        'user_id' => $userId,
+                        'user_email' => $userEmail,
+                        'session_id' => $sessionId,
+                        'sender' => 'bot',
+                        'message' => 'Learned flow detection triggered',
+                        'language' => $lang,
+                        'log_type' => 'flow_detection',
+                        'metadata' => json_encode($learnedFlowMatch),
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                } catch (\Exception $logEx) {
+                    Log::warning('Failed to log learned flow trigger: ' . $logEx->getMessage());
+                }
 
                 // إذا كان التصنيف دردشة عامة (Chitchat)
                 if (($learnedFlowMatch['flow'] ?? '') === 'chitchat') {
@@ -114,15 +130,21 @@ class ChatbotController extends Controller
                         ? 'أهلاً بك! كيف يمكنني مساعدتك اليوم؟'
                         : 'Hello there! How can I help you today?');
 
-                    ChatbotLog::create([
-                        'user_id' => $userId,
-                        'user_email' => $userEmail,
-                        'session_id' => $sessionId,
-                        'sender' => 'bot',
-                        'message' => $reply,
-                        'language' => $lang,
-                        'log_type' => 'chat',
-                    ]);
+                    try {
+                        DB::table('chatbot_logs')->insert([
+                            'user_id' => $userId,
+                            'user_email' => $userEmail,
+                            'session_id' => $sessionId,
+                            'sender' => 'bot',
+                            'message' => $reply,
+                            'language' => $lang,
+                            'log_type' => 'chat',
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]);
+                    } catch (\Exception $logEx) {
+                        Log::warning('Failed to log chitchat reply: ' . $logEx->getMessage());
+                    }
 
                     return response()->json([
                         'reply' => $reply,
@@ -152,16 +174,22 @@ class ChatbotController extends Controller
             // 2. محاولة مطابقة الكلمات بشكل ذكي مع المسارات الافتراضية الثابتة (Smart Flow Detection)
             $flowMatch = $this->detectFlowFromMessage($message, $lang);
             if ($flowMatch) {
-                ChatbotLog::create([
-                    'user_id' => $userId,
-                    'user_email' => $userEmail,
-                    'session_id' => $sessionId,
-                    'sender' => 'bot',
-                    'message' => 'Smart flow detection triggered',
-                    'language' => $lang,
-                    'log_type' => 'flow_detection',
-                    'metadata' => json_encode($flowMatch)
-                ]);
+                try {
+                    DB::table('chatbot_logs')->insert([
+                        'user_id' => $userId,
+                        'user_email' => $userEmail,
+                        'session_id' => $sessionId,
+                        'sender' => 'bot',
+                        'message' => 'Smart flow detection triggered',
+                        'language' => $lang,
+                        'log_type' => 'flow_detection',
+                        'metadata' => json_encode($flowMatch),
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                } catch (\Exception $logEx) {
+                    Log::warning('Failed to log smart flow trigger: ' . $logEx->getMessage());
+                }
 
                 $branchKey = $flowMatch['branch'] ?? null;
                 $redirectMessage = $lang === 'ar' ? 'جاري توجيهك للمسار المناسب...' : 'Redirecting to the appropriate path...';
@@ -182,15 +210,21 @@ class ChatbotController extends Controller
                     ? 'يبدو أنك تحتاج إلى دعم بشري. إذا أردت، يمكنك إرسال مشكلة تفصيلية عبر نموذج الدعم أدناه.'
                     : 'It looks like you need human support. If you wish, you can send a detailed issue using the support form below.';
 
-                ChatbotLog::create([
-                    'user_id' => $userId,
-                    'user_email' => $userEmail,
-                    'session_id' => $sessionId,
-                    'sender' => 'bot',
-                    'message' => $supportReply,
-                    'language' => $lang,
-                    'log_type' => 'chat',
-                ]);
+                try {
+                    DB::table('chatbot_logs')->insert([
+                        'user_id' => $userId,
+                        'user_email' => $userEmail,
+                        'session_id' => $sessionId,
+                        'sender' => 'bot',
+                        'message' => $supportReply,
+                        'language' => $lang,
+                        'log_type' => 'chat',
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                } catch (\Exception $logEx) {
+                    Log::warning('Failed to log support reply: ' . $logEx->getMessage());
+                }
 
                 return response()->json(['reply' => $supportReply, 'flow' => 'ticket_prompt']);
             }
@@ -198,15 +232,21 @@ class ChatbotController extends Controller
             // 4. البحث داخل بنك الأسئلة الشائعة (FAQ Answer)
             $faqAnswer = $this->findFaqAnswer($message, $lang);
             if ($faqAnswer !== null) {
-                ChatbotLog::create([
-                    'user_id' => $userId,
-                    'user_email' => $userEmail,
-                    'session_id' => $sessionId,
-                    'sender' => 'bot',
-                    'message' => $faqAnswer,
-                    'language' => $lang,
-                    'log_type' => 'chat',
-                ]);
+                try {
+                    DB::table('chatbot_logs')->insert([
+                        'user_id' => $userId,
+                        'user_email' => $userEmail,
+                        'session_id' => $sessionId,
+                        'sender' => 'bot',
+                        'message' => $faqAnswer,
+                        'language' => $lang,
+                        'log_type' => 'chat',
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                } catch (\Exception $logEx) {
+                    Log::warning('Failed to log FAQ answer: ' . $logEx->getMessage());
+                }
 
                 return response()->json(['reply' => $faqAnswer, 'flow' => 'chat']);
             }
@@ -226,15 +266,21 @@ class ChatbotController extends Controller
                 ]);
             }
 
-            ChatbotLog::create([
-                'user_id' => $userId,
-                'user_email' => $userEmail,
-                'session_id' => $sessionId,
-                'sender' => 'bot',
-                'message' => $replyText,
-                'language' => $lang,
-                'log_type' => 'chat',
-            ]);
+            try {
+                DB::table('chatbot_logs')->insert([
+                    'user_id' => $userId,
+                    'user_email' => $userEmail,
+                    'session_id' => $sessionId,
+                    'sender' => 'bot',
+                    'message' => $replyText,
+                    'language' => $lang,
+                    'log_type' => 'chat',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } catch (\Exception $logEx) {
+                Log::warning('Failed to log AI response: ' . $logEx->getMessage());
+            }
 
             $responsePayload = [
                 'reply' => $replyText,
@@ -256,26 +302,30 @@ class ChatbotController extends Controller
 
     /**
      * دالة فحص الكلمات والروابط التي تم تعلمها تلقائياً وحفظها بقاعدة البيانات
-     * تم تحديثها لتعمل مباشرة عبر موديل ChatbotLearnedKeyword المتناسق
+     * تم تحويلها بالكامل لتعمل مباشرة عبر الـ DB Builder لتجنب أخطاء الـ Model والـ Namespaces في الخوادم البعيدة
      */
     private function detectLearnedFlowFromMessage(string $message, string $lang): ?array
     {
-        $normalized = trim(mb_strtolower($message));
+        try {
+            $normalized = trim(mb_strtolower($message));
 
-        // استخدام الـ Eloquent Model بدلاً من DB Query Builder لضمان أفضل توافقية وأداء
-        $match = ChatbotLearnedKeyword::where('language', $lang)
-            ->where(function ($query) use ($message, $normalized) {
-                $query->where('keyword', $message)
-                    ->orWhere('normalized_keyword', $normalized);
-            })
-            ->first();
+            $match = DB::table('chatbot_learned_keywords')
+                ->where('language', $lang)
+                ->where(function($query) use ($message, $normalized) {
+                    $query->where('keyword', $message)
+                          ->orWhere('normalized_keyword', $normalized);
+                })
+                ->first();
 
-        if ($match) {
-            return [
-                'flow' => $match->target_flow,
-                'branch' => $match->target_branch,
-                'custom_response' => $match->custom_response,
-            ];
+            if ($match) {
+                return [
+                    'flow'            => $match->target_flow,
+                    'branch'          => $match->target_branch,
+                    'custom_response' => $match->custom_response,
+                ];
+            }
+        } catch (\Exception $e) {
+            Log::error('detectLearnedFlowFromMessage DB error: ' . $e->getMessage());
         }
 
         return null;
@@ -316,26 +366,32 @@ class ChatbotController extends Controller
 
     /**
      * دالة حفظ وتخزين الأسئلة غير المفهومة لإتاحتها للمراجعة والتعلم التلقائي لاحقاً
+     * تم تحويلها بالكامل لتعمل مباشرة عبر الـ DB Builder لتفادي مشاكل الموديلات
      */
     private function storeUnhandledQuery(string $message, string $language, array $context): void
     {
         try {
             // التحقق من تكرار السؤال لزيادة عداد التكرار (Occurrences) في قاعدة البيانات
-            $existing = ChatbotUnhandledQuery::where('query', $message)
+            $existing = DB::table('chatbot_unhandled_queries')
+                ->where('query', $message)
                 ->where('language', $language)
                 ->where('status', 'pending')
                 ->first();
 
             if ($existing) {
-                $existing->increment('occurrences');
+                DB::table('chatbot_unhandled_queries')
+                    ->where('id', $existing->id)
+                    ->increment('occurrences');
             } else {
-                ChatbotUnhandledQuery::create([
+                DB::table('chatbot_unhandled_queries')->insert([
                     'session_id' => $context['session_id'] ?? null,
                     'user_id' => $context['user_id'] ?? null,
                     'query' => $message,
                     'language' => $language,
                     'status' => 'pending',
                     'occurrences' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
                 ]);
             }
         } catch (\Exception $e) {
@@ -630,15 +686,21 @@ class ChatbotController extends Controller
         $flows = ChatbotFlowService::getFlows($lang);
         $rootMessage = $flows['root']['message'];
 
-        ChatbotLog::create([
-            'user_id' => $userId,
-            'user_email' => $userEmail,
-            'session_id' => $sessionId,
-            'sender' => 'bot',
-            'message' => $rootMessage,
-            'language' => $lang,
-            'log_type' => 'chat',
-        ]);
+        try {
+            DB::table('chatbot_logs')->insert([
+                'user_id' => $userId,
+                'user_email' => $userEmail,
+                'session_id' => $sessionId,
+                'sender' => 'bot',
+                'message' => $rootMessage,
+                'language' => $lang,
+                'log_type' => 'chat',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        } catch (\Exception $logEx) {
+            Log::warning('Failed to log flow action: ' . $logEx->getMessage());
+        }
 
         return response()->json([
             'reply' => $rootMessage,
@@ -727,8 +789,7 @@ class ChatbotController extends Controller
                 "إذا لم تظهر الميزات بعد الدفع، فإن التفعيل يكون عادةً فورياً. في حالات نادرة، انتظر حتى 5 دقائق ثم افتح تذكرة دعم.\n" .
                 "تأكد من إعداد بريد كل مدير فرع في صفحة الفريق وتحقق من مجلد Spam إذا لم تصل التنبيهات.\n\n" .
                 "Flow 5: الأمان، الخصوصية والدعم البشري:\n" .
-                "بيانات العملاء والشكاوى محفوظة بأمان، ولا يتم مشاركتها أو بيعها لأي طرف خارجي. تُستخدم فقط لتسليم التقارير وتنبيهات فريقك.\n" .
-                "إذا تعذر على البوت الإجابة، اطلب دعم بشري عبر الزر المخصص، وسنرسل التذكرة إلى info.zaynix@gmail.com بسرعة.";
+                "بيانات العملاء والشكاوى محفوظة بأمان، ولا يتم مشاركتها أو بيعها لأي طرف خارجي. تُستخدم فقط لتسليم التقارير وتنبيهات فريقك.";
         }
 
         return "Root Menu:\n" .
