@@ -249,7 +249,7 @@ class ChatbotController extends Controller
 
             return response()->json([
                 'reply' => $lang === 'ar'
-                    ? 'عذراً، حدث2 خطأ في السيرفر. الرجاء المحاولة مرة أخرى.'
+                    ? 'عذراً، حدث خطأ في السيرفر. الرجاء المحاولة مرة أخرى.'
                     : 'Sorry, a server error occurred. Please try again.',
             ], 500);
         }
@@ -857,37 +857,23 @@ EN;
         }
     }
 
-    private function detectLearnedFlowFromMessage(string $message, string $language): ?array
+    private function detectLearnedFlowFromMessage($message, $lang)
     {
-        $normalizedMessage = $this->normalizeLearningText($message, $language);
-        if ($normalizedMessage === '') {
-            return null;
-        }
+        // تأكد من عمل Import للموديل في أعلى الملف: use App\Models\ChatbotLearnedKeyword;
+        // نقوم بالبحث عن الكلمة المفتاحية المتطابقة مع لغة المحادثة
+        $match = \App\Models\ChatbotLearnedKeyword::where('language', $lang)
+            ->where(function ($query) use ($message) {
+                $query->where('keyword', $message)
+                    ->orWhere('normalized_keyword', trim(mb_strtolower($message)));
+            })
+            ->first();
 
-        $learnedKeywords = ChatbotLearnedKeyword::query()
-            ->where('language', $language)
-            ->orderByRaw('LENGTH(normalized_keyword) DESC')
-            ->limit(200)
-            ->get();
-
-        foreach ($learnedKeywords as $learnedKeyword) {
-            $keyword = (string) $learnedKeyword->normalized_keyword;
-
-            if ($keyword === '') {
-                continue;
-            }
-
-            if ($normalizedMessage === $keyword || Str::contains($normalizedMessage, $keyword)) {
-                $learnedKeyword->forceFill(['last_used_at' => now()])->save();
-
-                return [
-                    'flow' => $learnedKeyword->target_flow,
-                    'branch' => $learnedKeyword->target_branch,
-                    'custom_response' => $learnedKeyword->custom_response,
-                    'source' => 'learned_keyword',
-                    'keyword' => $learnedKeyword->keyword,
-                ];
-            }
+        if ($match) {
+            return [
+                'flow' => $match->target_flow,
+                'branch' => $match->target_branch,
+                'custom_response' => $match->custom_response,
+            ];
         }
 
         return null;
