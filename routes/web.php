@@ -52,6 +52,12 @@ Route::middleware('auth')->group(function () {
 
     Route::get('settings', [SettingsController::class, 'index'])->name('settings.index');
     Route::post('settings', [SettingsController::class, 'update'])->name('settings.update');
+
+    // ==========================================
+    // مسارات لوحة تتبع سجل التعلم الذاتي للبوت (Chatbot Learning Dashboard)
+    // ==========================================
+    Route::get('settings/chatbot-learning', [SettingsController::class, 'chatbotLearningDashboard'])->name('settings.chatbot-learning');
+    Route::delete('settings/chatbot-learning/{keyword}', [SettingsController::class, 'destroyLearnedKeyword'])->name('settings.chatbot-learning.destroy');
 });
 
 Route::get('locale/{locale}', [LocaleController::class, 'switch'])->name('locale.switch');
@@ -87,10 +93,9 @@ Route::get('/clear-all-cache', function () {
     return "All cache is cleared successfully!";
 });
 
-// تشغيل أمر التعلم التلقائي للـ Chatbot يدوياً
+// تشغيل أمر التعلم التلقائي للـ Chatbot يدوياً (كما هو تماماً بدون أي تعديل)
 Route::get('/run-chatbot-learning', function () {
     try {
-        // قمنا باستدعائه بناءً على الـ Signature الخاص بالأمر
         Artisan::call('chatbot:auto-learn');
 
         return response()->json([
