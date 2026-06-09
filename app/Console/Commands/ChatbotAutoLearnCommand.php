@@ -131,6 +131,10 @@ class ChatbotAutoLearnCommand extends Command
                                         'processed_at' => now(),
                                     ]);
                             }
+                        } else {
+                            Log::warning("Gemini pending-query extraction returned no parseable results for {$language}", [
+                                'body' => $response->body(),
+                            ]);
                         }
                     } else {
                         Log::warning("Gemini failed for pending {$language} queries", ['body' => $response->body()]);
@@ -171,7 +175,7 @@ class ChatbotAutoLearnCommand extends Command
                         ],
                     ]);
 
-                if ($response->successful()) {
+                    if ($response->successful()) {
                     $expandedResults = $this->extractLearningResults($response->json());
                     if ($expandedResults !== null) {
                         foreach ($expandedResults as $item) {
@@ -208,6 +212,10 @@ class ChatbotAutoLearnCommand extends Command
                                 $totalSelfExpanded++;
                             }
                         }
+                    } else {
+                        Log::warning("Gemini self-expansion returned no parseable results for {$language}", [
+                            'body' => $response->body(),
+                        ]);
                     }
                 } else {
                     Log::warning("Gemini self-expansion request failed for {$language}", ['body' => $response->body()]);
@@ -290,30 +298,70 @@ class ChatbotAutoLearnCommand extends Command
             "3. If a flow relates to pricing, generate phrases like 'كم الاشتراك', 'بكم الخدمة', 'pricing options', 'how much'.",
             "4. If a flow relates to location setup, generate phrases like 'كيف اضيف موقعي', 'اضافة فرع جديد', 'adding branches', 'new address'.",
             "5. You can also generate pleasantries/chitchat variations (greetings, feedback compliments, test queries) and map them to 'chitchat' with an appropriate 'generated_response'.",
-            "6. Make sure 'matched_flow' and 'matched_branch' exactly match the keys present in the Flow Map JSON.",
-            "7. Return ONLY valid raw JSON with this schema (make sure to generate up to 25-35 total creative results in the array):",
+            "6. Do not repeat any keyword that already exists in the provided keywords list. Avoid duplicates and avoid returning the same phrase with only small differences.",
+            "7. Return ONLY valid RAW JSON with no Markdown, no code fences, and no explanatory text.",
+            "8. Make sure 'matched_flow' and 'matched_branch' exactly match the keys present in the Flow Map JSON.",
+            "9. Return between 20 and 35 total creative results in the array.",
             '{"learning_results":[{"keyword":"brainstormed phrase or query","matched_flow":"flow_key_or_chitchat","matched_branch":"branch_key_or_null","confidence":0.90,"generated_response":"polite_reply_if_chitchat_else_null"}]}',
         ]);
     }
 
     private function extractLearningResults(array $body): ?array
     {
-        $text = data_get($body, 'candidates.0.content.parts.0.text');
+        $text = $this->getLearningResponseText($body);
         if (!is_string($text) || trim($text) === '') {
             return null;
         }
 
-        // تم الاستبدال الآمن للرموز الحساسة لتجنب انقطاع الكود البرمجي أثناء الإرسال والـ push
-        $backticks = chr(96) . chr(96) . chr(96);
-        $text = trim(str_replace([$backticks . 'json', $backticks], '', $text));
-
         $decoded = json_decode($text, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            Log::warning('Chatbot auto-learn returned invalid JSON from Gemini', [
+                'raw_text' => mb_substr($text, 0, 2000),
+                'json_error' => json_last_error_msg(),
+            ]);
+            return null;
+        }
 
-        if (!is_array($decoded) || !isset($decoded['learning_results']) || !is_array($decoded['learning_results'])) {
+        if (!isset($decoded['learning_results']) || !is_array($decoded['learning_results'])) {
+            Log::warning('Chatbot auto-learn Gemini output missing learning_results', [
+                'decoded' => $decoded,
+            ]);
             return null;
         }
 
         return $decoded['learning_results'];
+    }
+
+    private function getLearningResponseText(array $body): ?string
+    {
+        $candidates = [
+            'candidates.0.content.parts.0.text',
+            'candidates.0.content.0.text',
+            'candidates.0.output.0.content.0.text',
+            'candidates.0.text',
+        ];
+
+        foreach ($candidates as $path) {
+            $text = data_get($body, $path);
+            if (is_string($text) && trim($text) !== '') {
+                return $this->cleanLearningResponseText($text);
+            }
+        }
+
+        return null;
+    }
+
+    private function cleanLearningResponseText(string $text): string
+    {
+        $text = trim($text);
+        $text = preg_replace('/^```(?:json)?\s*/i', '', $text);
+        $text = preg_replace('/\s*```$/', '', $text);
+        $text = preg_replace('/^\s*JSON:\s*/i', '', $text);
+
+        $backticks = chr(96) . chr(96) . chr(96);
+        $text = str_replace([$backticks . 'json', $backticks], '', $text);
+
+        return trim($text);
     }
 
     private function isValidTarget(array $flowMap, string $flow, ?string $branch): bool
