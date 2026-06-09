@@ -28,6 +28,8 @@ class ChatbotAutoLearnCommand extends Command
 
         $totalLearnedFromUnhandled = 0;
         $totalSelfExpanded = 0;
+        $learnedFromUnhandledDetails = [];
+        $selfExpandedDetails = [];
         $limit = (int) $this->option('limit');
 
         foreach (['ar', 'en'] as $language) {
@@ -76,7 +78,7 @@ class ChatbotAutoLearnCommand extends Command
                     if ($response->successful()) {
                         $results = $this->extractLearningResults($response->json());
                         if ($results !== null) {
-                            $pendingByQuery = $pending->keyBy(fn(ChatbotUnhandledQuery $query) => $this->normalize($query->query, $language));
+                            $pendingByQuery = $pending->keyBy(fn($pendingQuery) => $this->normalize($pendingQuery->getAttribute('query'), $language));
                             $processedIds = [];
 
                             foreach ($results as $item) {
@@ -104,22 +106,21 @@ class ChatbotAutoLearnCommand extends Command
                                     continue;
                                 }
 
-                                ChatbotLearnedKeyword::updateOrCreate(
-                                    [
-                                        'language' => $language,
-                                        'normalized_keyword' => $normalized,
-                                    ],
-                                    [
-                                        'keyword' => $keyword,
-                                        'target_flow' => $matchedFlow,
-                                        'target_branch' => $matchedBranch !== '' ? $matchedBranch : null,
-                                        'custom_response' => $matchedFlow === 'chitchat' ? $generatedResponse : null,
-                                        'source' => 'gemini',
-                                        'confidence' => $confidence,
-                                    ]
+                                $summary = $this->persistLearnedKeyword(
+                                    $language,
+                                    $normalized,
+                                    $keyword,
+                                    $matchedFlow,
+                                    $matchedBranch !== '' ? $matchedBranch : null,
+                                    $matchedFlow === 'chitchat' ? $generatedResponse : null,
+                                    'gemini',
+                                    $confidence
                                 );
 
-                                $totalLearnedFromUnhandled++;
+                                if ($summary !== null) {
+                                    $learnedFromUnhandledDetails[] = $summary;
+                                    $totalLearnedFromUnhandled++;
+                                }
                             }
 
                             if ($processedIds !== []) {
@@ -191,22 +192,21 @@ class ChatbotAutoLearnCommand extends Command
                             $normalized = $this->normalize($keyword, $language);
 
                             // حفظ الكلمات المبتكرة ذاتياً وتحديد مصدرها كتعلم ذاتي
-                            ChatbotLearnedKeyword::updateOrCreate(
-                                [
-                                    'language' => $language,
-                                    'normalized_keyword' => $normalized,
-                                ],
-                                [
-                                    'keyword' => $keyword,
-                                    'target_flow' => $matchedFlow,
-                                    'target_branch' => $matchedBranch !== '' ? $matchedBranch : null,
-                                    'custom_response' => $matchedFlow === 'chitchat' ? $generatedResponse : null,
-                                    'source' => 'gemini_self_learning',
-                                    'confidence' => $confidence,
-                                ]
+                            $summary = $this->persistLearnedKeyword(
+                                $language,
+                                $normalized,
+                                $keyword,
+                                $matchedFlow,
+                                $matchedBranch !== '' ? $matchedBranch : null,
+                                $matchedFlow === 'chitchat' ? $generatedResponse : null,
+                                'gemini_self_learning',
+                                $confidence
                             );
 
-                            $totalSelfExpanded++;
+                            if ($summary !== null) {
+                                $selfExpandedDetails[] = $summary;
+                                $totalSelfExpanded++;
+                            }
                         }
                     }
                 } else {
@@ -221,6 +221,8 @@ class ChatbotAutoLearnCommand extends Command
         $this->info("Learning Cycle Completed Successfully!");
         $this->info("Learned from Unhandled Queries: {$totalLearnedFromUnhandled} keywords.");
         $this->info("Learned via Generative Self-Learning: {$totalSelfExpanded} proactive keywords.");
+        $this->outputDetailList('Detailed pending-query learning results', $learnedFromUnhandledDetails);
+        $this->outputDetailList('Detailed proactive self-learning results', $selfExpandedDetails);
         $this->info("========================================");
 
         return self::SUCCESS;
@@ -332,5 +334,58 @@ class ChatbotAutoLearnCommand extends Command
         }
 
         return Str::squish($text);
+    }
+
+    private function persistLearnedKeyword(
+        string $language,
+        string $normalized,
+        string $keyword,
+        string $matchedFlow,
+        ?string $matchedBranch,
+        ?string $generatedResponse,
+        string $source,
+        ?float $confidence
+    ): ?string {
+        $record = ChatbotLearnedKeyword::firstOrNew([
+            'language' => $language,
+            'normalized_keyword' => $normalized,
+        ]);
+
+        $record->keyword = $keyword;
+        $record->target_flow = $matchedFlow;
+        $record->target_branch = $matchedBranch;
+        $record->custom_response = $generatedResponse;
+        $record->source = $source;
+        $record->confidence = $confidence;
+        $record->save();
+
+        $action = $record->wasRecentlyCreated ? 'added' : 'updated';
+        $flowBranch = $matchedBranch ? "{$matchedFlow}.{$matchedBranch}" : $matchedFlow;
+        $responsePart = $generatedResponse ? " | response: {$generatedResponse}" : '';
+
+        return sprintf(
+            '%s: "%s" => %s%s',
+            ucfirst($action),
+            $keyword,
+            $flowBranch,
+            $responsePart
+        );
+    }
+
+    private function outputDetailList(string $title, array $items): void
+    {
+        if (empty($items)) {
+            $this->info("{$title}: none.");
+            return;
+        }
+
+        $this->info("{$title}:");
+        foreach (array_slice($items, 0, 80) as $item) {
+            $this->line(" - {$item}");
+        }
+
+        if (count($items) > 80) {
+            $this->info('... and ' . (count($items) - 80) . ' more results.');
+        }
     }
 }

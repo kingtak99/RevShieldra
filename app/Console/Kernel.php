@@ -24,5 +24,6 @@ class Kernel extends ConsoleKernel
     {
         $schedule->command('trial:send-reminders')->daily();
         $schedule->command('chatbot:auto-learn')->dailyAt('02:00')->withoutOverlapping();
+        $schedule->command('chatbot:auto-learn')->dailyAt('14:00')->withoutOverlapping();
     }
 }
