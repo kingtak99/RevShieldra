@@ -859,8 +859,8 @@ EN;
 
     private function detectLearnedFlowFromMessage($message, $lang)
     {
-        // تأكد من عمل Import للموديل في أعلى الملف: use App\Models\ChatbotLearnedKeyword;
-        // نقوم بالبحث عن الكلمة المفتاحية المتطابقة مع لغة المحادثة
+        // البحث عن الكلمة المفتاحية المتطابقة مع لغة المحادثة
+        // استخدمنا الـ Full Namespace للموديل لضمان قراءته بشكل صحيح
         $match = \App\Models\ChatbotLearnedKeyword::where('language', $lang)
             ->where(function ($query) use ($message) {
                 $query->where('keyword', $message)
