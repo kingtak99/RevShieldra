@@ -21,7 +21,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
         $apiKey = config('services.gemini.key');
         $model = config('services.gemini.model', 'gemini-flash-latest');
 
-        if (! $apiKey) {
+        if (!$apiKey) {
             $this->warn('GEMINI_API_KEY is not configured.');
 
             return self::FAILURE;
@@ -71,7 +71,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 continue;
             }
 
-            if (! $response->successful()) {
+            if (!$response->successful()) {
                 Log::warning('Chatbot auto learn Gemini response failed', [
                     'language' => $language,
                     'status' => $response->status(),
@@ -88,7 +88,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 continue;
             }
 
-            $pendingByQuery = $pending->keyBy(fn (ChatbotUnhandledQuery $query) => $this->normalize($query->query, $language));
+            $pendingByQuery = $pending->keyBy(fn(ChatbotUnhandledQuery $query) => $this->normalize($query->query, $language));
             $processedIds = [];
 
             foreach ($results as $item) {
@@ -112,7 +112,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
                     continue;
                 }
 
-                if ($matchedFlow !== 'chitchat' && ! $this->isValidTarget($flowMap, $matchedFlow, $matchedBranch !== '' ? $matchedBranch : null)) {
+                if ($matchedFlow !== 'chitchat' && !$this->isValidTarget($flowMap, $matchedFlow, $matchedBranch !== '' ? $matchedBranch : null)) {
                     continue;
                 }
 
@@ -197,14 +197,14 @@ class ChatbotLearnFromUnhandledCommand extends Command
     private function extractLearningResults(array $body): ?array
     {
         $text = data_get($body, 'candidates.0.content.parts.0.text');
-        if (! is_string($text) || trim($text) === '') {
+        if (!is_string($text) || trim($text) === '') {
             return null;
         }
 
         $text = trim(preg_replace('/^```(?:json)?\s*|\s*```$/', '', $text));
         $decoded = json_decode($text, true);
 
-        if (! is_array($decoded) || ! isset($decoded['learning_results']) || ! is_array($decoded['learning_results'])) {
+        if (!is_array($decoded) || !isset($decoded['learning_results']) || !is_array($decoded['learning_results'])) {
             return null;
         }
 
@@ -213,7 +213,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
 
     private function isValidTarget(array $flowMap, string $flow, ?string $branch): bool
     {
-        if (! isset($flowMap[$flow])) {
+        if (!isset($flowMap[$flow])) {
             return false;
         }
 
