@@ -12,7 +12,7 @@ use Illuminate\Support\Str;
 
 class ChatbotLearnFromUnhandledCommand extends Command
 {
-    protected $signature = 'chatbot:auto-learn {--limit=50 : Maximum pending queries per language}';
+    protected $signature = 'chatbot:learn-from-unhandled {--limit=50 : Maximum pending queries per language}';
 
     protected $description = 'Map unhandled chatbot queries to existing flows using Gemini and save learned keywords.';
 

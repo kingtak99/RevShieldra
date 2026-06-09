@@ -94,21 +94,20 @@ Route::get('/run-chatbot-learn-from-unhandled', function () {
     ignore_user_abort(true);
 
     try {
-        // تم تغيير الاسم هنا ليتطابق مع الـ signature في الكود الخاص بك
-        Artisan::call('chatbot:auto-learn');
+        Artisan::call('chatbot:learn-from-unhandled');
         $output = Artisan::output();
 
         return response()->json([
             'status' => 'success',
             'message' => 'Learning from unhandled queries executed successfully!',
-            'command' => 'chatbot:auto-learn',
+            'command' => 'chatbot:learn-from-unhandled',
             'output' => $output
         ]);
     } catch (\Exception $e) {
         return response()->json([
             'status' => 'error',
             'message' => 'Failed to execute command: ' . $e->getMessage(),
-            'command' => 'chatbot:auto-learn'
+            'command' => 'chatbot:learn-from-unhandled'
         ], 500);
     }
 });
