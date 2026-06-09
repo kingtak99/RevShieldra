@@ -257,8 +257,9 @@ class ChatbotLearnFromUnhandledCommand extends Command
             return null;
         }
 
-        // $endpoint = "https://generativelanguage.googleapis.com/v1/models/{$model}:generateContent?key={$apiKey}";
-        $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent";
+        // 👇 تم إصلاح السطر بالأسفل بإضافة الـ API Key في نهاية الرابط الـ v1beta
+        $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}";
+
         try {
             $response = Http::timeout($timeout)
                 ->withHeaders(['Content-Type' => 'application/json'])
