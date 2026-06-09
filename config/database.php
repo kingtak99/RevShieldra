@@ -97,12 +97,13 @@ return [
             'prefix' => '',
             'prefix_indexes' => true,
             'search_path' => 'public',
-            'sslmode' => env('DB_SSLMODE', 'prefer'),
+            'sslmode' => env('DB_SSLMODE', 'require'),
 
-            // 👇 أضف هذين السطرين هنا لحل مشكلة كاش الأوامر مع Neon مستقبلاً
-            'options' => [
-                PDO::ATTR_EMULATE_PREPARES => true,
-            ],
+            // 👇 Support hosted PostgreSQL pools that require SSL SNI and explicit SSL mode
+            'options' => extension_loaded('pgsql') ? array_filter(array_merge(
+                [PDO::ATTR_EMULATE_PREPARES => true],
+                defined('PDO::PGSQL_ATTR_SSL_MODE') ? [PDO::PGSQL_ATTR_SSL_MODE => env('DB_SSLMODE', 'require')] : []
+            )) : [],
         ],
 
         'sqlsrv' => [
