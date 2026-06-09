@@ -30,201 +30,224 @@ class ChatbotController extends Controller
             $userId = auth()->check() ? auth()->id() : null;
             $userEmail = auth()->check() ? auth()->user()->email : null;
 
-        // Handle Flow Navigation (new system)
-        if ($action === 'flow') {
-            return $this->handleFlowAction($request, $sessionId, $userId, $userEmail, $lang);
-        }
+            // Handle Flow Navigation (new system)
+            if ($action === 'flow') {
+                return $this->handleFlowAction($request, $sessionId, $userId, $userEmail, $lang);
+            }
 
-        if ($action === 'navigate') {
-            return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
-        }
+            if ($action === 'navigate') {
+                return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
+            }
 
-        if ($action === 'back') {
-            return $this->handleBackAction($request, $sessionId, $userId, $userEmail, $lang);
-        }
+            if ($action === 'back') {
+                return $this->handleBackAction($request, $sessionId, $userId, $userEmail, $lang);
+            }
 
-        if ($action === 'ticket') {
-            $request->validate([
-                'email' => 'required|email',
-                'message' => 'required|string',
-                'name' => 'nullable|string',
-                'category' => 'nullable|string',
-            ]);
+            if ($action === 'ticket') {
+                $request->validate([
+                    'email' => 'required|email',
+                    'message' => 'required|string',
+                    'name' => 'nullable|string',
+                    'category' => 'nullable|string',
+                ]);
 
-            return $this->submitTicketWithContext($request, $sessionId, $userId, $userEmail, $lang);
-        }
+                return $this->submitTicketWithContext($request, $sessionId, $userId, $userEmail, $lang);
+            }
 
-        $message = $request->input('message');
-
-        ChatbotLog::create([
-            'user_id' => $userId,
-            'user_email' => $userEmail,
-            'session_id' => $sessionId,
-            'sender' => 'user',
-            'message' => $message,
-            'language' => $lang,
-            'log_type' => 'chat',
-        ]);
-
-        if ($this->isGreeting($message, $lang)) {
-            $greetingReply = $lang === 'ar'
-                ? 'أهلاً بك! يمكنك اختيار أحد المسارات التالية للحصول على إجابة دقيقة وسريعة.'
-                : 'Welcome! Please choose one of the paths below for an accurate answer.';
+            $message = $request->input('message');
 
             ChatbotLog::create([
                 'user_id' => $userId,
                 'user_email' => $userEmail,
                 'session_id' => $sessionId,
-                'sender' => 'bot',
-                'message' => $greetingReply,
+                'sender' => 'user',
+                'message' => $message,
                 'language' => $lang,
                 'log_type' => 'chat',
             ]);
 
-            return response()->json([
-                'reply' => $greetingReply,
-                'flow' => 'chat',
-                'show_root_menu' => true,
-            ]);
-        }
-
-        $learnedFlowMatch = $this->detectLearnedFlowFromMessage($message, $lang);
-        if ($learnedFlowMatch) {
-            ChatbotLog::create([
-                'user_id' => $userId,
-                'user_email' => $userEmail,
-                'session_id' => $sessionId,
-                'sender' => 'bot',
-                'message' => 'Learned flow detection triggered',
-                'language' => $lang,
-                'log_type' => 'flow_detection',
-                'metadata' => json_encode($learnedFlowMatch),
-            ]);
-
-            if ($learnedFlowMatch['flow'] === 'chitchat') {
-                $reply = $learnedFlowMatch['custom_response'] ?? ($lang === 'ar'
-                    ? 'أهلاً بك! كيف يمكنني مساعدتك اليوم؟'
-                    : 'Hello there! How can I help you today?');
+            if ($this->isGreeting($message, $lang)) {
+                $greetingReply = $lang === 'ar'
+                    ? 'أهلاً بك! يمكنك اختيار أحد المسارات التالية للحصول على إجابة دقيقة وسريعة.'
+                    : 'Welcome! Please choose one of the paths below for an accurate answer.';
 
                 ChatbotLog::create([
                     'user_id' => $userId,
                     'user_email' => $userEmail,
                     'session_id' => $sessionId,
                     'sender' => 'bot',
-                    'message' => $reply,
+                    'message' => $greetingReply,
                     'language' => $lang,
                     'log_type' => 'chat',
                 ]);
 
                 return response()->json([
-                    'reply' => $reply,
+                    'reply' => $greetingReply,
                     'flow' => 'chat',
                     'show_root_menu' => true,
                 ]);
             }
 
-            $request->merge([
-                'flow_key' => $learnedFlowMatch['flow'],
-                'branch_key' => $learnedFlowMatch['branch'] ?? null,
-            ]);
+            $learnedFlowMatch = $this->detectLearnedFlowFromMessage($message, $lang);
+            $learnedFlowMatch = $this->detectLearnedFlowFromMessage($message, $lang);
+            if ($learnedFlowMatch) {
+                ChatbotLog::create([
+                    'user_id' => $userId,
+                    'user_email' => $userEmail,
+                    'session_id' => $sessionId,
+                    'sender' => 'bot',
+                    'message' => 'Learned flow detection triggered',
+                    'language' => $lang,
+                    'log_type' => 'flow_detection',
+                    'metadata' => json_encode($learnedFlowMatch),
+                ]);
 
-            return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
-        }
+                if (($learnedFlowMatch['flow'] ?? '') === 'chitchat' || ($learnedFlowMatch['target_flow'] ?? '') === 'chitchat') {
+                    $reply = $learnedFlowMatch['custom_response'] ?? ($lang === 'ar'
+                        ? 'أهلاً بك! كيف يمكنني مساعدتك اليوم؟'
+                        : 'Hello there! How can I help you today?');
 
-        // Try smart flow detection - match keywords to flows
-        $flowMatch = $this->detectFlowFromMessage($message, $lang);
-        if ($flowMatch) {
-            // Log the detected flow
-            ChatbotLog::create([
-                'user_id' => $userId,
-                'user_email' => $userEmail,
-                'session_id' => $sessionId,
-                'sender' => 'bot',
-                'message' => 'Smart flow detection triggered',
-                'language' => $lang,
-                'log_type' => 'flow_detection',
-                'metadata' => json_encode($flowMatch)
-            ]);
+                    ChatbotLog::create([
+                        'user_id' => $userId,
+                        'user_email' => $userEmail,
+                        'session_id' => $sessionId,
+                        'sender' => 'bot',
+                        'message' => $reply,
+                        'language' => $lang,
+                        'log_type' => 'chat',
+                    ]);
 
-            // Auto-navigate to the matched flow using navigate action
-            $branchKey = $flowMatch['branch'] ?? null;
-            $request->merge([
-                'flow_key' => $flowMatch['flow'],
-                'branch_key' => $branchKey
-            ]);
+                    return response()->json([
+                        'reply' => $reply,
+                        'flow' => 'chat',
+                        'show_root_menu' => true,
+                    ]);
+                }
 
-            if (!empty($branchKey)) {
-                // Direct to branch
+                // تأمين جلب القيم سواء كانت التسمية flow أو target_flow لعدم حدوث خطأ null
+                $extractedFlow = $learnedFlowMatch['flow'] ?? $learnedFlowMatch['target_flow'] ?? null;
+                $extractedBranch = $learnedFlowMatch['branch'] ?? $learnedFlowMatch['target_branch'] ?? null;
+
+                if (!$extractedFlow) {
+                    // إذا لم يجد مسار، نخليه يكمل كأنه شات طبيعي وما يعطي 500
+                    Log::warning('Learned flow detected but flow_key is missing', ['data' => $learnedFlowMatch]);
+                } else {
+                    // دمج البيانات بشكل آمن وتأكيد وجود الـ action المناسب للـ navigation
+                    $request->merge([
+                        'action' => 'navigate',
+                        'flow_key' => $extractedFlow,
+                        'branch_key' => $extractedBranch,
+                    ]);
+
+                    try {
+                        return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
+                    } catch (\Throwable $navException) {
+                        Log::error('Failed inside handleNavigateAction via LearnedFlow: ' . $navException->getMessage());
+                        // كخطة بديلة (Fallback) حتى لا تظهر للمستخدم شاشة خطأ بيضاء
+                        return response()->json([
+                            'reply' => $lang === 'ar' ? 'جاري توجيهك...' : 'Redirecting...',
+                            'flow' => 'chat',
+                            'flow_key' => $extractedFlow,
+                            'branch_key' => $extractedBranch
+                        ]);
+                    }
+                }
+            }
+
+            // Try smart flow detection - match keywords to flows
+            $flowMatch = $this->detectFlowFromMessage($message, $lang);
+            if ($flowMatch) {
+                // Log the detected flow
+                ChatbotLog::create([
+                    'user_id' => $userId,
+                    'user_email' => $userEmail,
+                    'session_id' => $sessionId,
+                    'sender' => 'bot',
+                    'message' => 'Smart flow detection triggered',
+                    'language' => $lang,
+                    'log_type' => 'flow_detection',
+                    'metadata' => json_encode($flowMatch)
+                ]);
+
+                // Auto-navigate to the matched flow using navigate action
+                $branchKey = $flowMatch['branch'] ?? null;
+                $request->merge([
+                    'flow_key' => $flowMatch['flow'],
+                    'branch_key' => $branchKey
+                ]);
+
+                if (!empty($branchKey)) {
+                    // Direct to branch
+                    return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
+                }
+
+                // Show branches for this flow
                 return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
             }
 
-            // Show branches for this flow
-            return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
-        }
+            if ($this->isSupportRequest($message, $lang)) {
+                $supportReply = $lang === 'ar'
+                    ? 'يبدو أنك تحتاج إلى دعم بشري. إذا أردت، يمكنك إرسال مشكلة تفصيلية عبر نموذج الدعم أدناه.'
+                    : 'It looks like you need human support. If you wish, you can send a detailed issue using the support form below.';
 
-        if ($this->isSupportRequest($message, $lang)) {
-            $supportReply = $lang === 'ar'
-                ? 'يبدو أنك تحتاج إلى دعم بشري. إذا أردت، يمكنك إرسال مشكلة تفصيلية عبر نموذج الدعم أدناه.'
-                : 'It looks like you need human support. If you wish, you can send a detailed issue using the support form below.';
+                ChatbotLog::create([
+                    'user_id' => $userId,
+                    'user_email' => $userEmail,
+                    'session_id' => $sessionId,
+                    'sender' => 'bot',
+                    'message' => $supportReply,
+                    'language' => $lang,
+                    'log_type' => 'chat',
+                ]);
+
+                return response()->json(['reply' => $supportReply, 'flow' => 'ticket_prompt']);
+            }
+
+            $faqAnswer = $this->findFaqAnswer($message, $lang);
+            if ($faqAnswer !== null) {
+                ChatbotLog::create([
+                    'user_id' => $userId,
+                    'user_email' => $userEmail,
+                    'session_id' => $sessionId,
+                    'sender' => 'bot',
+                    'message' => $faqAnswer,
+                    'language' => $lang,
+                    'log_type' => 'chat',
+                ]);
+
+                return response()->json(['reply' => $faqAnswer, 'flow' => 'chat']);
+            }
+
+            $botResponse = $this->generateBotResponse($message, $lang);
+            $replyText = $botResponse['reply'] ?? ($lang === 'ar'
+                ? 'أعتذر، لم أتمكن من الإجابة الآن. يمكنك استخدام الدعم الفني إذا كنت تحتاج مساعدة إضافية.'
+                : 'I’m sorry, I could not answer that right now. You can use support if you need additional help.');
+            $fallback = $botResponse['fallback'] ?? false;
+
+            if ($fallback) {
+                $this->storeUnhandledQuery($message, $lang, [
+                    'session_id' => $sessionId,
+                    'user_id' => $userId,
+                ]);
+            }
 
             ChatbotLog::create([
                 'user_id' => $userId,
                 'user_email' => $userEmail,
                 'session_id' => $sessionId,
                 'sender' => 'bot',
-                'message' => $supportReply,
+                'message' => $replyText,
                 'language' => $lang,
                 'log_type' => 'chat',
             ]);
 
-            return response()->json(['reply' => $supportReply, 'flow' => 'ticket_prompt']);
-        }
+            $responsePayload = [
+                'reply' => $replyText,
+                'fallback' => $fallback,
+                'flow' => $fallback ? 'ticket_prompt' : 'chat',
+            ];
 
-        $faqAnswer = $this->findFaqAnswer($message, $lang);
-        if ($faqAnswer !== null) {
-            ChatbotLog::create([
-                'user_id' => $userId,
-                'user_email' => $userEmail,
-                'session_id' => $sessionId,
-                'sender' => 'bot',
-                'message' => $faqAnswer,
-                'language' => $lang,
-                'log_type' => 'chat',
-            ]);
-
-            return response()->json(['reply' => $faqAnswer, 'flow' => 'chat']);
-        }
-
-        $botResponse = $this->generateBotResponse($message, $lang);
-        $replyText = $botResponse['reply'] ?? ($lang === 'ar'
-            ? 'أعتذر، لم أتمكن من الإجابة الآن. يمكنك استخدام الدعم الفني إذا كنت تحتاج مساعدة إضافية.'
-            : 'I’m sorry, I could not answer that right now. You can use support if you need additional help.');
-        $fallback = $botResponse['fallback'] ?? false;
-
-        if ($fallback) {
-            $this->storeUnhandledQuery($message, $lang, [
-                'session_id' => $sessionId,
-                'user_id' => $userId,
-            ]);
-        }
-
-        ChatbotLog::create([
-            'user_id' => $userId,
-            'user_email' => $userEmail,
-            'session_id' => $sessionId,
-            'sender' => 'bot',
-            'message' => $replyText,
-            'language' => $lang,
-            'log_type' => 'chat',
-        ]);
-
-        $responsePayload = [
-            'reply' => $replyText,
-            'fallback' => $fallback,
-            'flow' => $fallback ? 'ticket_prompt' : 'chat',
-        ];
-
-        return response()->json($responsePayload);
+            return response()->json($responsePayload);
         } catch (\Exception $exception) {
             Log::error('Chatbot request failed: ' . $exception->getMessage(), ['exception' => $exception]);
 
@@ -553,7 +576,7 @@ EN;
                     if (json_last_error() === JSON_ERROR_NONE && is_array($decoded) && isset($decoded['reply'])) {
                         return [
                             'reply' => trim($decoded['reply']),
-                            'fallback' => isset($decoded['fallback']) ? (bool)$decoded['fallback'] : false,
+                            'fallback' => isset($decoded['fallback']) ? (bool) $decoded['fallback'] : false,
                         ];
                     }
 
@@ -563,7 +586,7 @@ EN;
                     if (json_last_error() === JSON_ERROR_NONE && is_array($decoded) && isset($decoded['reply'])) {
                         return [
                             'reply' => trim($decoded['reply']),
-                            'fallback' => isset($decoded['fallback']) ? (bool)$decoded['fallback'] : false,
+                            'fallback' => isset($decoded['fallback']) ? (bool) $decoded['fallback'] : false,
                         ];
                     }
 
@@ -891,7 +914,7 @@ EN;
             $query->query = $message;
             $query->status = 'pending';
             $query->last_seen_at = now();
-            $query->metadata = array_filter($metadata, fn ($value) => $value !== null);
+            $query->metadata = array_filter($metadata, fn($value) => $value !== null);
 
             if ($query->exists) {
                 $query->occurrences = $query->occurrences + 1;
