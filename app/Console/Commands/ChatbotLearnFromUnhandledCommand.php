@@ -93,7 +93,8 @@ class ChatbotLearnFromUnhandledCommand extends Command
             }
 
             $pendingByQuery = $pending->keyBy(fn(ChatbotUnhandledQuery $query) => $this->normalize($query->query, $language));
-            $processedIds = [];
+            $queryStatus = array_fill_keys($pendingIds, 'no_learning');
+            $learnedIds = [];
 
             foreach ($results as $item) {
                 $keyword = trim((string) ($item['keyword'] ?? ''));
@@ -108,15 +109,17 @@ class ChatbotLearnFromUnhandledCommand extends Command
 
                 $normalized = $this->normalize($keyword, $language);
                 $unhandled = $pendingByQuery->get($normalized);
-                if ($unhandled) {
-                    $processedIds[] = $unhandled->id;
+                if (!$unhandled) {
+                    continue;
                 }
 
                 if ($matchedFlow === 'none') {
+                    $queryStatus[$unhandled->id] = 'no_learning';
                     continue;
                 }
 
                 if ($matchedFlow !== 'chitchat' && !$this->isValidTarget($flowMap, $matchedFlow, $matchedBranch !== '' ? $matchedBranch : null)) {
+                    $queryStatus[$unhandled->id] = 'no_learning';
                     continue;
                 }
 
@@ -135,15 +138,23 @@ class ChatbotLearnFromUnhandledCommand extends Command
                     ]
                 );
 
+                $queryStatus[$unhandled->id] = 'learned';
+                $learnedIds[] = $unhandled->id;
                 $totalLearned++;
             }
 
-            ChatbotUnhandledQuery::query()
-                ->whereIn('id', $pendingIds)
-                ->update([
-                    'status' => 'processed',
-                    'processed_at' => now(),
-                ]);
+            $now = now();
+            foreach (['learned', 'no_learning'] as $status) {
+                $ids = array_keys(array_filter($queryStatus, fn($value) => $value === $status));
+                if ($ids !== []) {
+                    ChatbotUnhandledQuery::query()
+                        ->whereIn('id', $ids)
+                        ->update([
+                            'status' => $status,
+                            'processed_at' => $now,
+                        ]);
+                }
+            }
 
             $this->info("Processed {$language}: learned {$totalLearned} total keywords so far.");
         }
