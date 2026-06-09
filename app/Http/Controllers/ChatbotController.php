@@ -58,7 +58,7 @@ class ChatbotController extends Controller
 
             $message = $request->input('message');
 
-            // حفظ رسالة المستخدم في اللوج بشكل آمن باستخدام الـ DB Builder لتفادي انهيار الموديل
+            // حفظ رسالة المستخدم في اللوج بشكل آمن
             try {
                 DB::table('chatbot_logs')->insert([
                     'user_id' => $userId,
@@ -204,7 +204,7 @@ class ChatbotController extends Controller
                 ]);
             }
 
-            // 3. التحقق من طلبات الدعم البشري المباشرة
+            // 3. التحقق من طلبات الدعم البشري المباشرة (تم إصلاحها وإعادتها)
             if ($this->isSupportRequest($message, $lang)) {
                 $supportReply = $lang === 'ar'
                     ? 'يبدو أنك تحتاج إلى دعم بشري. إذا أردت، يمكنك إرسال مشكلة تفصيلية عبر نموذج الدعم أدناه.'
@@ -302,7 +302,6 @@ class ChatbotController extends Controller
 
     /**
      * دالة فحص الكلمات والروابط التي تم تعلمها تلقائياً وحفظها بقاعدة البيانات
-     * تم تحويلها بالكامل لتعمل مباشرة عبر الـ DB Builder لتجنب أخطاء الـ Model والـ Namespaces في الخوادم البعيدة
      */
     private function detectLearnedFlowFromMessage(string $message, string $lang): ?array
     {
@@ -366,7 +365,6 @@ class ChatbotController extends Controller
 
     /**
      * دالة حفظ وتخزين الأسئلة غير المفهومة لإتاحتها للمراجعة والتعلم التلقائي لاحقاً
-     * تم تحويلها بالكامل لتعمل مباشرة عبر الـ DB Builder لتفادي مشاكل الموديلات
      */
     private function storeUnhandledQuery(string $message, string $language, array $context): void
     {
@@ -471,6 +469,25 @@ class ChatbotController extends Controller
 
         foreach ($keywords as $keyword) {
             if (Str::contains($text, $keyword)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * التحقق من طلبات الدعم البشري المباشرة
+     */
+    private function isSupportRequest(string $message, string $language): bool
+    {
+        $message = mb_strtolower($message);
+        $supportKeywords = $language === 'ar'
+            ? ['مساعدة', 'الدعم', 'بشري', 'تحدث مع', 'لا تعمل', 'لا يمكنني', 'contact support', 'طلب دعم']
+            : ['support', 'help', 'human', 'agent', 'cannot', 'can’t', 'not working', 'contact', 'ticket'];
+
+        foreach ($supportKeywords as $keyword) {
+            if (Str::contains($message, $keyword)) {
                 return true;
             }
         }
@@ -610,7 +627,7 @@ class ChatbotController extends Controller
     private function generateBotResponse(string $message, string $language): array
     {
         $systemPrompt = $language === 'ar'
-            ? "أنت المساعد الذكي الرسمي لـ RevShieldra. لديك قدرة فائقة على فهم اللهجات العربية والأخطاء الإملائية والتعبيرات العامية. إذا كان السؤال قريبًا من أي موضوع داخل الـ Flows الخمسة – مثل الأسعار، الاشتراكات، التفعيل، QR، إعداد الفروع، صلاحيات الفريق، التنبيهات، صفحة الصيانة، أو الأمان – فأجب مباشرةً دون إرسال المستخدم إلى الدعم البشري، حتى لو كانت الصياغة غير واضحة قليلاً. استخدم fallback=true فقط عندما يكون السؤال خارج نطاق Flows الخمسة تمامًا أو عندما يطلب المستخدم دعمًا بشريًا صريحًا. أجب فقط بصيغة JSON خام بدون أي أكواد أو شروحات إضافية. يجب أن يحتوي الناتج على الحقول: reply وfallback."
+            ? "أنت المساعد الذكي الرسمي لـ RevShieldra. لديك قدرة فائقة على فهم اللهجات العربية والأخطاء الإملائية والتعبيرات العامية. إذا كان السؤال قريبًا من أي موضوع داخل الـ Flows الخمسة – مثل الأسعار، الاشتраكات، التفعيل، QR، إعداد الفروع، صلاحيات الفريق، التنبيهات، صفحة الصيانة، أو الأمان – فأجب مباشرةً دون إرسال المستخدم إلى الدعم البشري، حتى لو كانت الصياغة غير واضحة قليلاً. استخدم fallback=true فقط عندما يكون السؤال خارج نطاق Flows الخمسة تمامًا أو عندما يطلب المستخدم دعمًا بشريًا صريحًا. أجب فقط بصيغة JSON خام بدون أي أكواد أو شروحات إضافية. يجب أن يحتوي الناتج على الحقول: reply وfallback."
             : "You are the official RevShieldra smart assistant. You have excellent NLP capability and understand dialects, typos, and similar-sounding phrases. If the question is close to any of the five Flows – like pricing, plans, activation, QR, branch setup, team permissions, alerts, maintenance page, or security – answer directly and do not send the user to human support, even if the wording is slightly unclear. Use fallback=true only when the question is clearly outside the five Flows or when the user explicitly asks for human support. Reply only in raw JSON with the fields reply and fallback.";
 
         $flowKnowledge = $this->getFlowKnowledgeBase($language);
@@ -679,7 +696,7 @@ class ChatbotController extends Controller
     }
 
     /**
-     * استدعاء وعرض القائمة الرئيسية (الـ Root Menu)
+     * استدعاء وعرض القائمة الرئيسية (الـ Root Menu) بشكل آمن
      */
     private function handleFlowAction(Request $request, string $sessionId, ?int $userId, ?string $userEmail, string $lang): \Illuminate\Http\JsonResponse
     {
@@ -705,13 +722,13 @@ class ChatbotController extends Controller
         return response()->json([
             'reply' => $rootMessage,
             'flow' => 'root',
-            'show_menu' => ChatbotFlowService::getRootMenu($lang),
+            'show_menu' => $this->getSafeRootMenu($lang),
             'message_type' => 'separator'
         ]);
     }
 
     /**
-     * معالجة وتفريع التنقل بين الـ Branches والـ Flows المتاحة
+     * معالجة وتفريع التنقل بين الـ Branches والـ Flows المتاحة بشكل آمن تماماً
      */
     private function handleNavigateAction(Request $request, string $sessionId, ?int $userId, ?string $userEmail, string $lang): \Illuminate\Http\JsonResponse
     {
@@ -735,11 +752,84 @@ class ChatbotController extends Controller
             ], 404);
         }
 
+        // إذا كان هناك اختيار لفرع محدد (Branch Key)
+        if ($branchKey) {
+            $branchData = $flowData['branches'][$branchKey] ?? null;
+            if ($branchData) {
+                $responseMessage = $branchData['response'] ?? '';
+                
+                return response()->json([
+                    'reply' => $responseMessage,
+                    'flow' => $flowKey,
+                    'show_menu' => $this->getSafeBranchMenu($flowKey, $lang)
+                ]);
+            }
+        }
+
         return response()->json([
             'reply' => $flowData['message'] ?? '',
             'flow' => $flowKey,
-            'show_menu' => ChatbotFlowService::getBranchMenu($flowKey, $lang)
+            'show_menu' => $this->getSafeBranchMenu($flowKey, $lang)
         ]);
+    }
+
+    /**
+     * دالة دمج وبناء الـ Root Menu بشكل آمن حتى لو كانت دالة getRootMenu غير معرّفة بالـ Service
+     */
+    private function getSafeRootMenu(string $lang): array
+    {
+        if (method_exists(ChatbotFlowService::class, 'getRootMenu')) {
+            return ChatbotFlowService::getRootMenu($lang);
+        }
+
+        $flows = ChatbotFlowService::getFlows($lang);
+        $menu = [];
+        $rootFlows = $flows['root']['flows'] ?? [];
+        foreach ($rootFlows as $flowKey => $flow) {
+            $menu[] = [
+                'action' => 'navigate',
+                'label' => $flow['label'] ?? $flowKey,
+                'flow_key' => $flowKey,
+                'branch_key' => null,
+            ];
+        }
+        return $menu;
+    }
+
+    /**
+     * دالة دمج وبناء الـ Branch Menu تلقائياً وحماية السيرفر من أي نقص دوال في الـ Service
+     */
+    private function getSafeBranchMenu(string $flowKey, string $lang): array
+    {
+        if (method_exists(ChatbotFlowService::class, 'getBranchMenu')) {
+            return ChatbotFlowService::getBranchMenu($flowKey, $lang);
+        }
+
+        $flows = ChatbotFlowService::getFlows($lang);
+        $flowData = $flows['root']['flows'][$flowKey] ?? null;
+        $menu = [];
+
+        if ($flowData) {
+            $branches = $flowData['branches'] ?? [];
+            foreach ($branches as $branchKey => $branch) {
+                $menu[] = [
+                    'action' => 'navigate',
+                    'label' => $branch['label'] ?? $branchKey,
+                    'flow_key' => $flowKey,
+                    'branch_key' => $branchKey,
+                ];
+            }
+        }
+
+        // إضافة زر الرجوع الدائم لتوفير تجربة مستخدم مثالية
+        $menu[] = [
+            'action' => 'back',
+            'label' => $lang === 'ar' ? '⬅️ العودة للقائمة الرئيسية' : '⬅️ Back to Main Menu',
+            'flow_key' => null,
+            'branch_key' => null,
+        ];
+
+        return $menu;
     }
 
     /**
