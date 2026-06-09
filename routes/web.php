@@ -87,21 +87,77 @@ Route::get('/clear-all-cache', function () {
     return "All cache is cleared successfully!";
 });
 
-// تشغيل أمر التعلم التلقائي للـ Chatbot يدوياً
-Route::get('/run-chatbot-learning', function () {
+// تشغيل أمري التعلم التلقائي للـ Chatbot يدوياً
+// أمر 1: التعلم من أخطاء المستخدمين
+Route::get('/run-chatbot-learn-from-unhandled', function () {
+    set_time_limit(0);
+    ignore_user_abort(true);
+
     try {
-        // قمنا باستدعائه بناءً على الـ Signature الخاص بالأمر
-        Artisan::call('chatbot:auto-learn');
+        Artisan::call('chatbot:learn-from-unhandled');
+        $output = Artisan::output();
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Chatbot auto-learning executed successfully!',
-            'output' => Artisan::output()
+            'message' => 'Learning from unhandled queries executed successfully!',
+            'command' => 'chatbot:learn-from-unhandled',
+            'output' => $output
         ]);
     } catch (\Exception $e) {
         return response()->json([
             'status' => 'error',
-            'message' => 'Failed to execute command: ' . $e->getMessage()
+            'message' => 'Failed to execute command: ' . $e->getMessage(),
+            'command' => 'chatbot:learn-from-unhandled'
+        ], 500);
+    }
+});
+
+// أمر 2: التعلم الذاتي المستقل
+Route::get('/run-chatbot-self-learning', function () {
+    set_time_limit(0);
+    ignore_user_abort(true);
+
+    try {
+        Artisan::call('chatbot:self-learning');
+        $output = Artisan::output();
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Self-learning executed successfully!',
+            'command' => 'chatbot:self-learning',
+            'output' => $output
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Failed to execute command: ' . $e->getMessage(),
+            'command' => 'chatbot:self-learning'
+        ], 500);
+    }
+});
+
+// أمر مركب: تشغيل الاثنين معاً
+Route::get('/run-chatbot-learning', function () {
+    set_time_limit(0);
+    ignore_user_abort(true);
+
+    try {
+        Artisan::call('chatbot:learn-from-unhandled');
+        $output1 = Artisan::output();
+
+        Artisan::call('chatbot:self-learning');
+        $output2 = Artisan::output();
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'All chatbot learning cycles executed successfully!',
+            'learn_from_unhandled' => $output1,
+            'self_learning' => $output2
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Failed to execute commands: ' . $e->getMessage()
         ], 500);
     }
 });
