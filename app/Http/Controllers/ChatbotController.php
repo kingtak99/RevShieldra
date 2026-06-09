@@ -256,13 +256,14 @@ class ChatbotController extends Controller
 
     /**
      * دالة فحص الكلمات والروابط التي تم تعلمها تلقائياً وحفظها بقاعدة البيانات
+     * تم تحديثها لتعمل مباشرة عبر موديل ChatbotLearnedKeyword المتناسق
      */
     private function detectLearnedFlowFromMessage(string $message, string $lang): ?array
     {
         $normalized = trim(mb_strtolower($message));
 
-        $match = DB::table('chatbot_learned_keywords')
-            ->where('language', $lang)
+        // استخدام الـ Eloquent Model بدلاً من DB Query Builder لضمان أفضل توافقية وأداء
+        $match = ChatbotLearnedKeyword::where('language', $lang)
             ->where(function ($query) use ($message, $normalized) {
                 $query->where('keyword', $message)
                     ->orWhere('normalized_keyword', $normalized);
