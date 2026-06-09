@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
 class ChatbotController extends Controller
@@ -23,6 +24,36 @@ class ChatbotController extends Controller
             'action' => 'required|string|in:chat,ticket,flow,navigate,back',
             'language' => 'required|string|in:ar,en',
         ]);
+
+        $action = $request->input('action');
+
+        if ($action === 'chat') {
+            Validator::make($request->all(), [
+                'message' => 'required|string',
+            ])->validate();
+        }
+
+        if ($action === 'navigate') {
+            Validator::make($request->all(), [
+                'flow_key' => 'required|string',
+                'branch_key' => 'nullable|string',
+            ])->validate();
+        }
+
+        if ($action === 'back') {
+            Validator::make($request->all(), [
+                'level' => 'nullable|string|in:root,flow',
+                'flow_key' => 'nullable|string',
+            ])->validate();
+
+            if ($request->input('level') === 'flow' && !$request->filled('flow_key')) {
+                return response()->json([
+                    'reply' => $request->input('language') === 'ar'
+                        ? 'بيانات الرجوع غير كاملة.'
+                        : 'Back action data is missing.',
+                ], 422);
+            }
+        }
 
         try {
             $sessionId = $request->input('session_id');
@@ -867,7 +898,7 @@ EN;
             'name' => $nameInput,
             'email' => $emailInput,
             'issue' => $issueContent,
-            'is_logged_in' => auth()->check(),
+           
             'category' => $category,
             'flow_context' => $flowContext,
         ];
