@@ -221,17 +221,23 @@ class ChatbotController extends Controller
                     Log::warning('Failed to log smart flow trigger: ' . $logEx->getMessage());
                 }
 
-                $branchKey = data_get($flowMatch, 'branch');
-                $redirectMessage = $lang === 'ar' ? 'جاري توجيهك للمسار المناسب...' : 'Redirecting to the appropriate path...';
+                $flowKey = data_get($flowMatch, 'flow');
 
-                return response()->json([
-                    'reply' => $redirectMessage,
-                    'action' => 'navigate',
-                    'flow' => 'navigate',
-                    'flow_key' => $flowMatch['flow'],
-                    'branch_key' => $branchKey,
-                    'auto_redirect' => true
-                ]);
+                if (!$flowKey) {
+                    Log::warning('Chatbot smart flow detection returned no flow key', ['flowMatch' => $flowMatch]);
+                } else {
+                    $branchKey = data_get($flowMatch, 'branch');
+                    $redirectMessage = $lang === 'ar' ? 'جاري توجيهك للمسار المناسب...' : 'Redirecting to the appropriate path...';
+
+                    return response()->json([
+                        'reply' => $redirectMessage,
+                        'action' => 'navigate',
+                        'flow' => 'navigate',
+                        'flow_key' => $flowKey,
+                        'branch_key' => $branchKey,
+                        'auto_redirect' => true
+                    ]);
+                }
             }
 
             // 3. التحقق من طلبات الدعم البشري المباشرة (تم إصلاحها وإعادتها)
