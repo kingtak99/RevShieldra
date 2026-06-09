@@ -102,8 +102,8 @@ class ChatbotController extends Controller
                     'metadata' => json_encode($learnedFlowMatch),
                 ]);
 
-                // التحقق مما إذا كانت دردشة عامة (Chitchat)
-                if (($learnedFlowMatch['flow'] ?? '') === 'chitchat' || ($learnedFlowMatch['target_flow'] ?? '') === 'chitchat') {
+                // إذا كانت chitchat (مثل "سي الخير" أو "كيف حالك" الظاهرة في الصورة)
+                if (($learnedFlowMatch['flow'] ?? '') === 'chitchat') {
                     $reply = $learnedFlowMatch['custom_response'] ?? ($lang === 'ar'
                         ? 'أهلاً بك! كيف يمكنني مساعدتك اليوم؟'
                         : 'Hello there! How can I help you today?');
@@ -125,24 +125,13 @@ class ChatbotController extends Controller
                     ]);
                 }
 
-                // استخراج المسار المستهدف بشكل آمن
-                $extractedFlow = $learnedFlowMatch['flow'] ?? $learnedFlowMatch['target_flow'] ?? null;
-                $extractedBranch = $learnedFlowMatch['branch'] ?? $learnedFlowMatch['target_branch'] ?? null;
+                // إذا كانت مسارات مخصصة (مثل security الموضحة بالصورة)
+                $extractedFlow = $learnedFlowMatch['flow'] ?? null;
+                $extractedBranch = $learnedFlowMatch['branch'] ?? null;
 
                 if ($extractedFlow) {
-                    // حفظ لوج الرد الآلي الموجه للمسار
-                    $redirectMessage = $lang === 'ar' ? 'تم العثور على المسار المطلوب، جاري توجيهك...' : 'Flow found, redirecting you...';
-                    ChatbotLog::create([
-                        'user_id' => $userId,
-                        'user_email' => $userEmail,
-                        'session_id' => $sessionId,
-                        'sender' => 'bot',
-                        'message' => $redirectMessage,
-                        'language' => $lang,
-                        'log_type' => 'chat',
-                    ]);
+                    $redirectMessage = $lang === 'ar' ? 'جاري توجيهك للمسار المطلوب...' : 'Redirecting you to the requested path...';
 
-                    // إرجاع استجابة واضحة لتنبيه الفرونت-إند بتبديل المسار وعرض الأزرار والـ branches المناسبة
                     return response()->json([
                         'reply' => $redirectMessage,
                         'action' => 'navigate',
@@ -859,12 +848,15 @@ EN;
 
     private function detectLearnedFlowFromMessage($message, $lang)
     {
-        // البحث عن الكلمة المفتاحية المتطابقة مع لغة المحادثة
-        // استخدمنا الـ Full Namespace للموديل لضمان قراءته بشكل صحيح
-        $match = \App\Models\ChatbotLearnedKeyword::where('language', $lang)
-            ->where(function ($query) use ($message) {
+        // تنظيف النص وتوحيده ليتطابق مع العمود normalized_keyword_variant في الصورة
+        $normalized = trim(mb_strtolower($message));
+
+        // الاستعلام المباشر باستخدام الـ Query Builder لضمان عدم حدوث أي تعارض مع الموديل
+        $match = \Illuminate\Support\Facades\DB::table('chatbot_learned_keywords')
+            ->where('language', $lang)
+            ->where(function ($query) use ($message, $normalized) {
                 $query->where('keyword', $message)
-                    ->orWhere('normalized_keyword', trim(mb_strtolower($message)));
+                    ->orWhere('normalized_keyword', $normalized);
             })
             ->first();
 
