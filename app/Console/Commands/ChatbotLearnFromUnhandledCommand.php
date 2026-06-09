@@ -48,40 +48,68 @@ class ChatbotLearnFromUnhandledCommand extends Command
             $flowMap = $this->buildFlowMap($language);
             $prompt = $this->buildPrompt($language, $flowMap, $pending->pluck('query')->all());
 
-            try {
-                $response = Http::timeout(30)
-                    ->withHeaders(['Content-Type' => 'application/json'])
-                    ->post("https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}", [
-                        'contents' => [
-                            [
-                                'parts' => [
-                                    ['text' => $prompt],
+            $attempt = 0;
+            $maxAttempts = 3;
+            $response = null;
+            $requestException = null;
+
+            while ($attempt < $maxAttempts) {
+                $attempt++;
+
+                try {
+                    $response = Http::timeout(30)
+                        ->withHeaders(['Content-Type' => 'application/json'])
+                        ->post("https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}", [
+                            'contents' => [
+                                [
+                                    'parts' => [
+                                        ['text' => $prompt],
+                                    ],
                                 ],
                             ],
-                        ],
-                        'generationConfig' => [
-                            'temperature' => 0.1,
-                            'maxOutputTokens' => 1600,
-                            'responseMimeType' => 'application/json',
-                        ],
-                    ]);
-            } catch (\Throwable $exception) {
-                Log::warning('Chatbot auto learn Gemini request failed: ' . $exception->getMessage());
-                $this->error("Gemini request failed for {$language}: {$exception->getMessage()}");
+                            'generationConfig' => [
+                                'temperature' => 0.1,
+                                'maxOutputTokens' => 1600,
+                                'responseMimeType' => 'application/json',
+                            ],
+                        ]);
+                } catch (\Throwable $exception) {
+                    $requestException = $exception;
+                    if ($attempt >= $maxAttempts) {
+                        break;
+                    }
 
-                $this->markPendingBatchAsFailed($pendingIds, $language, $exception->getMessage());
-                continue;
+                    $wait = min(5 * $attempt, 30);
+                    $this->warn("Gemini request exception on attempt {$attempt}/{$maxAttempts}. Retrying in {$wait}s...");
+                    sleep($wait);
+                    continue;
+                }
+
+                if ($response->successful()) {
+                    break;
+                }
+
+                if (in_array($response->status(), [429, 503], true) && $attempt < $maxAttempts) {
+                    $delay = $this->extractRetryDelaySeconds($response->json()) ?? min(5 * $attempt, 30);
+                    $this->warn("Gemini returned HTTP {$response->status()} for {$language}. Retrying in {$delay}s ({$attempt}/{$maxAttempts})...");
+                    sleep($delay);
+                    continue;
+                }
+
+                break;
             }
 
-            if (!$response->successful()) {
-                Log::warning('Chatbot auto learn Gemini response failed', [
+            if ($response === null || !$response->successful()) {
+                $errorMessage = $requestException ? $requestException->getMessage() : ($response ? "HTTP {$response->status()}" : 'unknown error');
+                Log::warning('Chatbot auto learn Gemini request failed after retries', [
                     'language' => $language,
-                    'status' => $response->status(),
-                    'body' => $response->body(),
+                    'attempts' => $attempt,
+                    'error' => $errorMessage,
+                    'body' => $response ? $response->body() : null,
                 ]);
-                $this->error("Gemini returned HTTP {$response->status()} for {$language}.");
+                $this->error("Gemini request failed for {$language}: {$errorMessage}");
 
-                $this->markPendingBatchAsFailed($pendingIds, $language, "HTTP {$response->status()}");
+                $this->markPendingBatchAsFailed($pendingIds, $language, $errorMessage);
                 continue;
             }
 
@@ -263,5 +291,31 @@ class ChatbotLearnFromUnhandledCommand extends Command
             'error' => $reason,
             'ids' => $ids,
         ]);
+    }
+
+    private function extractRetryDelaySeconds(array $body): ?int
+    {
+        $details = data_get($body, 'error.details', []);
+        if (!is_array($details)) {
+            return null;
+        }
+
+        foreach ($details as $detail) {
+            if (!is_array($detail) || data_get($detail, '@type') !== 'type.googleapis.com/google.rpc.RetryInfo') {
+                continue;
+            }
+
+            $seconds = data_get($detail, 'retryDelay.seconds');
+            if (is_numeric($seconds)) {
+                return (int) $seconds;
+            }
+
+            $nanos = data_get($detail, 'retryDelay.nanos');
+            if (is_numeric($nanos) && $nanos > 0) {
+                return 1;
+            }
+        }
+
+        return null;
     }
 }
