@@ -155,8 +155,8 @@ class ChatbotController extends Controller
                 }
 
                 // إذا كان التصنيف دردشة عامة (Chitchat)
-                if (($learnedFlowMatch['flow'] ?? '') === 'chitchat') {
-                    $reply = $learnedFlowMatch['custom_response'] ?? ($lang === 'ar'
+                if (data_get($learnedFlowMatch, 'flow', '') === 'chitchat') {
+                    $reply = data_get($learnedFlowMatch, 'custom_response') ?? ($lang === 'ar'
                         ? 'أهلاً بك! كيف يمكنني مساعدتك اليوم؟'
                         : 'Hello there! How can I help you today?');
 
@@ -184,8 +184,8 @@ class ChatbotController extends Controller
                 }
 
                 // إذا كان التوجيه لمسار مخصص من الأوامر الذكية
-                $extractedFlow = $learnedFlowMatch['flow'] ?? null;
-                $extractedBranch = $learnedFlowMatch['branch'] ?? null;
+                $extractedFlow = data_get($learnedFlowMatch, 'flow');
+                $extractedBranch = data_get($learnedFlowMatch, 'branch');
 
                 if ($extractedFlow) {
                     $redirectMessage = $lang === 'ar' ? 'جاري توجيهك للمسار المطلوب...' : 'Redirecting you to the requested path...';
@@ -221,7 +221,7 @@ class ChatbotController extends Controller
                     Log::warning('Failed to log smart flow trigger: ' . $logEx->getMessage());
                 }
 
-                $branchKey = $flowMatch['branch'] ?? null;
+                $branchKey = data_get($flowMatch, 'branch');
                 $redirectMessage = $lang === 'ar' ? 'جاري توجيهك للمسار المناسب...' : 'Redirecting to the appropriate path...';
 
                 return response()->json([
@@ -789,8 +789,8 @@ EN;
         ]);
 
         // Store flow context in session for later use with tickets
-        if ($session = session()) {
-            $session->put("chatbot_flow_{$sessionId}", [
+        if ($request->hasSession()) {
+            $request->session()->put("chatbot_flow_{$sessionId}", [
                 'flow' => $flowKey,
                 'branch' => $branchKey,
                 'category' => $category
@@ -881,7 +881,9 @@ EN;
         $category = $request->input('category', 'general');
 
         // Get flow context if exists
-        $flowContext = ($s = session()) ? $s->get("chatbot_flow_{$sessionId}", []) : [];
+        $flowContext = $request->hasSession()
+            ? $request->session()->get("chatbot_flow_{$sessionId}", [])
+            : [];
 
         ChatbotLog::create([
             'user_id' => $userId,
