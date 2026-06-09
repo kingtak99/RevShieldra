@@ -88,7 +88,7 @@ class ChatbotController extends Controller
                 ]);
             }
 
-            $learnedFlowMatch = $this->detectLearnedFlowFromMessage($message, $lang);
+            // 1. فحص الكلمات والمسارات التي تم تعلمها تلقائياً (Learned Flows)
             $learnedFlowMatch = $this->detectLearnedFlowFromMessage($message, $lang);
             if ($learnedFlowMatch) {
                 ChatbotLog::create([
@@ -102,6 +102,7 @@ class ChatbotController extends Controller
                     'metadata' => json_encode($learnedFlowMatch),
                 ]);
 
+                // التحقق مما إذا كانت دردشة عامة (Chitchat)
                 if (($learnedFlowMatch['flow'] ?? '') === 'chitchat' || ($learnedFlowMatch['target_flow'] ?? '') === 'chitchat') {
                     $reply = $learnedFlowMatch['custom_response'] ?? ($lang === 'ar'
                         ? 'أهلاً بك! كيف يمكنني مساعدتك اليوم؟'
@@ -124,40 +125,38 @@ class ChatbotController extends Controller
                     ]);
                 }
 
-                // تأمين جلب القيم سواء كانت التسمية flow أو target_flow لعدم حدوث خطأ null
+                // استخراج المسار المستهدف بشكل آمن
                 $extractedFlow = $learnedFlowMatch['flow'] ?? $learnedFlowMatch['target_flow'] ?? null;
                 $extractedBranch = $learnedFlowMatch['branch'] ?? $learnedFlowMatch['target_branch'] ?? null;
 
-                if (!$extractedFlow) {
-                    // إذا لم يجد مسار، نخليه يكمل كأنه شات طبيعي وما يعطي 500
-                    Log::warning('Learned flow detected but flow_key is missing', ['data' => $learnedFlowMatch]);
-                } else {
-                    // دمج البيانات بشكل آمن وتأكيد وجود الـ action المناسب للـ navigation
-                    $request->merge([
-                        'action' => 'navigate',
-                        'flow_key' => $extractedFlow,
-                        'branch_key' => $extractedBranch,
+                if ($extractedFlow) {
+                    // حفظ لوج الرد الآلي الموجه للمسار
+                    $redirectMessage = $lang === 'ar' ? 'تم العثور على المسار المطلوب، جاري توجيهك...' : 'Flow found, redirecting you...';
+                    ChatbotLog::create([
+                        'user_id' => $userId,
+                        'user_email' => $userEmail,
+                        'session_id' => $sessionId,
+                        'sender' => 'bot',
+                        'message' => $redirectMessage,
+                        'language' => $lang,
+                        'log_type' => 'chat',
                     ]);
 
-                    try {
-                        return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
-                    } catch (\Throwable $navException) {
-                        Log::error('Failed inside handleNavigateAction via LearnedFlow: ' . $navException->getMessage());
-                        // كخطة بديلة (Fallback) حتى لا تظهر للمستخدم شاشة خطأ بيضاء
-                        return response()->json([
-                            'reply' => $lang === 'ar' ? 'جاري توجيهك...' : 'Redirecting...',
-                            'flow' => 'chat',
-                            'flow_key' => $extractedFlow,
-                            'branch_key' => $extractedBranch
-                        ]);
-                    }
+                    // إرجاع استجابة واضحة لتنبيه الفرونت-إند بتبديل المسار وعرض الأزرار والـ branches المناسبة
+                    return response()->json([
+                        'reply' => $redirectMessage,
+                        'action' => 'navigate',
+                        'flow' => 'navigate',
+                        'flow_key' => $extractedFlow,
+                        'branch_key' => $extractedBranch,
+                        'auto_redirect' => true
+                    ]);
                 }
             }
 
             // Try smart flow detection - match keywords to flows
             $flowMatch = $this->detectFlowFromMessage($message, $lang);
             if ($flowMatch) {
-                // Log the detected flow
                 ChatbotLog::create([
                     'user_id' => $userId,
                     'user_email' => $userEmail,
@@ -169,20 +168,17 @@ class ChatbotController extends Controller
                     'metadata' => json_encode($flowMatch)
                 ]);
 
-                // Auto-navigate to the matched flow using navigate action
                 $branchKey = $flowMatch['branch'] ?? null;
-                $request->merge([
+                $redirectMessage = $lang === 'ar' ? 'جاري توجيهك للمسار المناسب...' : 'Redirecting to the appropriate path...';
+
+                return response()->json([
+                    'reply' => $redirectMessage,
+                    'action' => 'navigate',
+                    'flow' => 'navigate',
                     'flow_key' => $flowMatch['flow'],
-                    'branch_key' => $branchKey
+                    'branch_key' => $branchKey,
+                    'auto_redirect' => true
                 ]);
-
-                if (!empty($branchKey)) {
-                    // Direct to branch
-                    return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
-                }
-
-                // Show branches for this flow
-                return $this->handleNavigateAction($request, $sessionId, $userId, $userEmail, $lang);
             }
 
             if ($this->isSupportRequest($message, $lang)) {
