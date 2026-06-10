@@ -46,7 +46,7 @@ class SupportTicketMail extends Mailable
     public function sendViaBrevo(string $recipientEmail): void
     {
 
-        $apiKey = env('BREVO_API_KEY');
+        $apiKey = trim(env('BREVO_API_KEY'));
 
         if (empty($apiKey)) {
             throw new \RuntimeException('BREVO_API_KEY is not configured.');
@@ -97,13 +97,27 @@ class SupportTicketMail extends Mailable
 
         try {
             $response = Http::withHeaders([
+                'api-key' => env('BREVO_API_KEY'),
+                'Accept' => 'application/json',
+            ])->get('https://api.brevo.com/v3/account');
+
+            dd([
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+            $response = Http::withHeaders([
                 'api-key' => $apiKey,
                 'Accept' => 'application/json',
             ])->post('https://api.brevo.com/v3/smtp/email', $payload);
 
             if (!$response->successful()) {
                 Log::error('Brevo email send failed', ['status' => $response->status(), 'body' => $response->body(), 'payload_preview' => substr(json_encode($payload), 0, 1000)]);
-                throw new \RuntimeException('Brevo email send failed: HTTP ' . $response->status());
+                throw new \RuntimeException(
+                    'Brevo email send failed: HTTP ' .
+                    $response->status() .
+                    ' BODY: ' .
+                    $response->body()
+                );
             }
         } catch (\Throwable $e) {
             Log::error('Brevo email send exception: ' . $e->getMessage(), ['exception' => $e]);
@@ -112,6 +126,9 @@ class SupportTicketMail extends Mailable
                 'prefix' => substr(env('BREVO_API_KEY'), 0, 10),
             ]);
             Log::info(env('BREVO_API_KEY'));
+            Log::info([
+                'length' => strlen(env('BREVO_API_KEY')),
+            ]);
             throw $e;
 
         }
