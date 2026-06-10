@@ -28,16 +28,26 @@ Artisan::command('trial:send-reminders', function () {
         }
 
         if ($daysRemaining === 7 && ! $subscription->reminder_7_days_sent) {
-            Mail::to($user->email)->send(new TrialNotification($user, $subscription, $business, 'seven_day'));
-            $subscription->update(['reminder_7_days_sent' => true]);
-            $this->info("Sent 7-day reminder to {$user->email}");
+            try {
+                (new TrialNotification($user, $subscription, $business, 'seven_day'))
+                    ->sendViaBrevo($user->email, $user->name);
+                $subscription->update(['reminder_7_days_sent' => true]);
+                $this->info("Sent 7-day reminder to {$user->email}");
+            } catch (\Throwable $e) {
+                $this->error("Failed to send 7-day reminder to {$user->email}: " . $e->getMessage());
+            }
             continue;
         }
 
         if ($daysRemaining === 1 && ! $subscription->reminder_1_day_sent) {
-            Mail::to($user->email)->send(new TrialNotification($user, $subscription, $business, 'one_day'));
-            $subscription->update(['reminder_1_day_sent' => true]);
-            $this->info("Sent 1-day reminder to {$user->email}");
+            try {
+                (new TrialNotification($user, $subscription, $business, 'one_day'))
+                    ->sendViaBrevo($user->email, $user->name);
+                $subscription->update(['reminder_1_day_sent' => true]);
+                $this->info("Sent 1-day reminder to {$user->email}");
+            } catch (\Throwable $e) {
+                $this->error("Failed to send 1-day reminder to {$user->email}: " . $e->getMessage());
+            }
             continue;
         }
 
@@ -47,8 +57,13 @@ Artisan::command('trial:send-reminders', function () {
                 'expiry_notice_sent' => true,
             ]);
             $business->update(['plan' => 'expired']);
-            Mail::to($user->email)->send(new TrialNotification($user, $subscription, $business, 'expired'));
-            $this->info("Sent expiration notice to {$user->email}");
+            try {
+                (new TrialNotification($user, $subscription, $business, 'expired'))
+                    ->sendViaBrevo($user->email, $user->name);
+                $this->info("Sent expiration notice to {$user->email}");
+            } catch (\Throwable $e) {
+                $this->error("Failed to send expiration notice to {$user->email}: " . $e->getMessage());
+            }
             continue;
         }
     }

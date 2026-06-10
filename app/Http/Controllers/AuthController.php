@@ -92,12 +92,12 @@ class AuthController extends Controller
         $business->update(['plan' => 'trial']);
 
         try {
-            Mail::to($user->email)->send(new TrialNotification(
+            (new TrialNotification(
                 user: $user,
                 subscription: $subscription,
                 business: $business,
                 messageType: 'welcome'
-            ));
+            ))->sendViaBrevo($user->email, $user->name);
         } catch (\Throwable $e) {
             logger()->error('Trial welcome email failed: '.$e->getMessage());
         }

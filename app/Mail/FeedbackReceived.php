@@ -4,18 +4,19 @@ namespace App\Mail;
 
 use App\Models\Feedback;
 use App\Models\Location;
+use App\Mail\Traits\SendsViaBrevo;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Queue\SerializesModels;
 
 class FeedbackReceived extends Mailable
 {
-    use Queueable, SerializesModels;
+    use Queueable, SerializesModels, SendsViaBrevo;
 
     public Location $location;
     public Feedback $feedback;
     public ?string $attachmentPath;
-    public string $logoPath;
+    public string $logoUrl;
     public bool $rtl;
     public string $dashboardUrl;
 
@@ -24,7 +25,7 @@ class FeedbackReceived extends Mailable
         $this->location = $location;
         $this->feedback = $feedback;
         $this->attachmentPath = $attachmentPath;
-        $this->logoPath = public_path('images/revshieldra-logo-bright.png');
+        $this->logoUrl = asset('images/revshieldra-logo-bright.png');
         $this->rtl = preg_match('/\p{Arabic}/u', $location->name) === 1;
         $this->dashboardUrl = route('dashboard');
     }
@@ -45,5 +46,22 @@ class FeedbackReceived extends Mailable
         }
 
         return $mail;
+    }
+
+    public function brevoAttachments(): array
+    {
+        if (!$this->attachmentPath) {
+            return [];
+        }
+
+        $attachmentFile = storage_path('app/public/' . $this->attachmentPath);
+        if (!file_exists($attachmentFile)) {
+            return [];
+        }
+
+        return [[
+            'path' => $attachmentFile,
+            'name' => basename($attachmentFile),
+        ]];
     }
 }

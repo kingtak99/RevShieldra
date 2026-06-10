@@ -12,7 +12,7 @@
                 <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="background:#ffffff;border-radius:24px;overflow:hidden;box-shadow:0 24px 64px rgba(15,23,42,0.08);">
                     <tr>
                         <td style="background:#0f172a;padding:24px 32px;text-align:center;">
-                            <img src="{{ $message->embed($logoPath) }}" alt="RevShieldra" width="120" style="display:block;margin:0 auto 16px;max-width:120px;height:auto;" />
+                            <img src="{{ $logoUrl }}" alt="RevShieldra" width="120" style="display:block;margin:0 auto 16px;max-width:120px;height:auto;" />
                             <h1 style="margin:0;color:#ffffff;font-size:22px;letter-spacing:0.02em;font-weight:700;">{{ __('emails.feedback_received.title') }}</h1>
                             <p style="margin:8px 0 0;color:#cbd5e1;font-size:14px;">{{ __('emails.feedback_received.summary') }}</p>
                         </td>

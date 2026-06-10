@@ -5,13 +5,14 @@ namespace App\Mail;
 use App\Models\Business;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Mail\Traits\SendsViaBrevo;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Queue\SerializesModels;
 
 class TrialNotification extends Mailable
 {
-    use Queueable, SerializesModels;
+    use Queueable, SerializesModels, SendsViaBrevo;
 
     public User $user;
     public Subscription $subscription;

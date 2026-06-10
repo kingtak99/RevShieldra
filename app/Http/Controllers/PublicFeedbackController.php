@@ -153,9 +153,12 @@ class PublicFeedbackController extends Controller
             $mailable = (new FeedbackReceived($location, $feedback, $feedback->attachment_path))
                 ->locale($emailLocale);
 
-            Mail::mailer(config('mail.default'))
-                ->to($location->complaint_email)
-                ->send($mailable);
+            $mailable->sendViaBrevo(
+                $location->complaint_email,
+                null,
+                $feedback->email,
+                $feedback->name ?? null,
+            );
 
             return true;
         } catch (\Throwable $e) {
