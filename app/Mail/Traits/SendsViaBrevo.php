@@ -16,8 +16,6 @@ trait SendsViaBrevo
             throw new \RuntimeException('BREVO_API_KEY is not configured.');
         }
 
-        $this->build();
-
         $html = $this->renderBrevoHtmlContent();
         if (trim($html) === '') {
             $html = $this->renderBrevoFallbackHtml();
@@ -91,18 +89,18 @@ trait SendsViaBrevo
         }
     }
 
-    protected function renderBrevoHtmlContent(): string
+    public function renderBrevoHtmlContent(): string
     {
         if (!empty($this->markdown)) {
-            return (string) app(Markdown::class)->render($this->markdown, $this->buildViewData());
+            return (string) app(Markdown::class)->render($this->markdown, $this->getBrevoViewData());
         }
 
         if (!empty($this->htmlView)) {
-            return view($this->htmlView, $this->buildViewData())->render();
+            return view($this->htmlView, $this->getBrevoViewData())->render();
         }
 
         if (!empty($this->view)) {
-            return view($this->view, $this->buildViewData())->render();
+            return view($this->view, $this->getBrevoViewData())->render();
         }
 
         if (!empty($this->html)) {
@@ -110,13 +108,13 @@ trait SendsViaBrevo
         }
 
         if (!empty($this->textView)) {
-            return nl2br(view($this->textView, $this->buildViewData())->render());
+            return nl2br(view($this->textView, $this->getBrevoViewData())->render());
         }
 
         return '';
     }
 
-    protected function renderBrevoFallbackHtml(): string
+    public function renderBrevoFallbackHtml(): string
     {
         if (!empty($this->subject)) {
             return '<p>' . e($this->subject) . '</p>';
@@ -125,7 +123,7 @@ trait SendsViaBrevo
         return '<p>A new email has been generated.</p>';
     }
 
-    protected function getBrevoSubject(): string
+    public function getBrevoSubject(): string
     {
         if (!empty($this->subject)) {
             return $this->subject;
@@ -141,8 +139,8 @@ trait SendsViaBrevo
         return 'Notification from RevShieldra';
     }
 
-    public function buildViewData(): array
+    protected function getBrevoViewData(): array
     {
-        return method_exists($this, 'buildViewData') ? $this->buildViewData() : [];
+        return [];
     }
 }
