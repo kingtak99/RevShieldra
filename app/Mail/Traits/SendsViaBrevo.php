@@ -91,7 +91,7 @@ trait SendsViaBrevo
         }
     }
 
-    protected function renderBrevoHtmlContent(): string
+    public function renderBrevoHtmlContent(): string
     {
         if (!empty($this->markdown)) {
             return (string) app(Markdown::class)->render($this->markdown, $this->buildViewData());
@@ -116,7 +116,7 @@ trait SendsViaBrevo
         return '';
     }
 
-    protected function renderBrevoFallbackHtml(): string
+    public function renderBrevoFallbackHtml(): string
     {
         if (!empty($this->subject)) {
             return '<p>' . e($this->subject) . '</p>';
@@ -125,7 +125,7 @@ trait SendsViaBrevo
         return '<p>A new email has been generated.</p>';
     }
 
-    protected function getBrevoSubject(): string
+    public function getBrevoSubject(): string
     {
         if (!empty($this->subject)) {
             return $this->subject;
@@ -141,7 +141,7 @@ trait SendsViaBrevo
         return 'Notification from RevShieldra';
     }
 
-    protected function buildViewData(): array
+    public function buildViewData(): array
     {
         return method_exists($this, 'buildViewData') ? $this->buildViewData() : [];
     }
