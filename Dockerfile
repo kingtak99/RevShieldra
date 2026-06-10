@@ -1,5 +1,6 @@
 FROM php:8.2-apache
 
+# إضافة ca-certificates و openssl لحل مشاكل التشفير مع سيرفرات الـ SMTP
 RUN apt-get update && apt-get install -y \
     libpng-dev \
     libjpeg-dev \
@@ -8,6 +9,8 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     git \
+    ca-certificates \
+    openssl \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install pdo_mysql pdo_pgsql pgsql gd
 
