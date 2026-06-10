@@ -906,7 +906,7 @@ EN;
             'name' => $nameInput,
             'email' => $emailInput,
             'issue' => $issueContent,
-           
+            'is_logged_in' => $userId !== null,
             'category' => $category,
             'flow_context' => $flowContext,
         ];
