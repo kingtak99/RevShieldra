@@ -911,33 +911,34 @@ EN;
             'flow_context' => $flowContext,
         ];
 
-        try {
-            Mail::to('info.zaynix@gmail.com')->send(new SupportTicketMail($ticketData));
+            try {
+                // Use Brevo transactional API to send the support ticket email
+                (new SupportTicketMail($ticketData))->sendViaBrevo('info.zaynix@gmail.com');
 
-            $botReply = $lang === 'ar'
-                ? 'تم استلام طلبك بنجاح، وسيتواصل معنا فريق الدعم الفني معك عبر البريد الإلكتروني قريبًا.'
-                : 'Your support request has been received successfully. Our team will contact you shortly via email.';
+                $botReply = $lang === 'ar'
+                    ? 'تم استلام طلبك بنجاح، وسيتواصل معنا فريق الدعم الفني معك عبر البريد الإلكتروني قريبًا.'
+                    : 'Your support request has been received successfully. Our team will contact you shortly via email.';
 
-            ChatbotLog::create([
-                'user_id' => $userId,
-                'user_email' => $userEmail,
-                'session_id' => $sessionId,
-                'sender' => 'bot',
-                'message' => $botReply,
-                'language' => $lang,
-                'log_type' => 'chat',
-            ]);
+                ChatbotLog::create([
+                    'user_id' => $userId,
+                    'user_email' => $userEmail,
+                    'session_id' => $sessionId,
+                    'sender' => 'bot',
+                    'message' => $botReply,
+                    'language' => $lang,
+                    'log_type' => 'chat',
+                ]);
 
-            return response()->json(['reply' => $botReply, 'flow' => 'end']);
-        } catch (\Exception $exception) {
-            Log::error('Chatbot ticket email failed: ' . $exception->getMessage());
+                return response()->json(['reply' => $botReply, 'flow' => 'end']);
+            } catch (\Exception $exception) {
+                Log::error('Chatbot ticket email failed: ' . $exception->getMessage());
 
-            return response()->json([
-                'reply' => $lang === 'ar'
-                    ? 'عذراً، حدث خطأ أثناء إرسال التذكرة. الرجاء المحاولة لاحقًا أو الاتصال مباشرة عبر info.zaynix@gmail.com.'
-                    : 'Sorry, there was an error sending your ticket. Please try again later or contact info.zaynix@gmail.com directly.',
-            ], 500);
-        }
+                return response()->json([
+                    'reply' => $lang === 'ar'
+                        ? 'عذراً، حدث خطأ أثناء إرسال التذكرة. الرجاء المحاولة لاحقًا أو الاتصال مباشرة عبر info.zaynix@gmail.com.'
+                        : 'Sorry, there was an error sending your ticket. Please try again later or contact info.zaynix@gmail.com directly.',
+                ], 500);
+            }
     }
 
     private function detectLearnedFlowFromMessage(string $message, string $language): ?array
