@@ -109,6 +109,11 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 ]);
                 $this->error("Gemini request failed for {$language}: {$errorMessage}");
 
+                if ($this->isTemporaryGeminiFailure($response, $requestException)) {
+                    $this->warn("Temporary Gemini failure for {$language}. Keeping pending queries for retry later.");
+                    continue;
+                }
+
                 $this->markPendingBatchAsFailed($pendingIds, $language, $errorMessage);
                 continue;
             }
@@ -317,5 +322,18 @@ class ChatbotLearnFromUnhandledCommand extends Command
         }
 
         return null;
+    }
+
+    private function isTemporaryGeminiFailure(?\Illuminate\Http\Client\Response $response, ?\Throwable $exception): bool
+    {
+        if ($exception !== null) {
+            return true;
+        }
+
+        if ($response === null) {
+            return true;
+        }
+
+        return in_array($response->status(), [429, 503, 504], true);
     }
 }
