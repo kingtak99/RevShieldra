@@ -24,9 +24,9 @@ COPY . /var/www/html
 
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# تحديث الاعتمادات والتأكد من وجود مكتبة إرسال طلبات الويب للإيميل
+# تحديث الاعتمادات وتثبيت البكج الخاصة بـ Brevo والمكتبات الأخرى
 RUN composer update --no-dev --optimize-autoloader --ignore-platform-reqs \
-    && composer require guzzlehttp/guzzle resend/resend-laravel --ignore-platform-reqs
+    && composer require guzzlehttp/guzzle resend/resend-laravel symfony/brevo-mailer --ignore-platform-reqs
 
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 

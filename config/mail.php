@@ -14,7 +14,8 @@ return [
     |
     */
 
-    'default' => 'resend',
+    // التعديل 1: جعل الـ Default يقرأ من الـ env وإذا مش موجود يستعمل brevo بدلاً من تثبيته على resend
+    'default' => env('MAIL_MAILER', 'brevo'),
 
     /*
     |--------------------------------------------------------------------------
@@ -31,7 +32,7 @@ return [
     |
     | Supported: "smtp", "sendmail", "mailgun", "ses", "ses-v2",
     |            "postmark", "resend", "log", "array",
-    |            "failover", "roundrobin"
+    |            "failover", "roundrobin", "brevo"
     |
     */
 
@@ -48,16 +49,17 @@ return [
             'local_domain' => env('MAIL_EHLO_DOMAIN'),
         ],
 
+        // التعديل 2: إضافة تعريف الـ Mailer الخاص بـ brevo داخل مصفوفة الـ mailers
+        'brevo' => [
+            'transport' => 'brevo',
+        ],
+
         'ses' => [
             'transport' => 'ses',
         ],
 
         'postmark' => [
             'transport' => 'postmark',
-            // 'message_stream_id' => env('POSTMARK_MESSAGE_STREAM_ID'),
-            // 'client' => [
-            //     'timeout' => 5,
-            // ],
         ],
 
         'resend' => [
@@ -109,8 +111,9 @@ return [
     |
     */
 
+    // التعديل 3: جعل الايميل يقرأ من الـ env عشان ما يضل ثابت على onboarding@resend.dev
     'from' => [
-        'address' => 'onboarding@resend.dev',
-        'name' => 'RevShieldra',
+        'address' => env('MAIL_FROM_ADDRESS', 'info.zaynix@gmail.com'),
+        'name' => env('MAIL_FROM_NAME', 'RevShieldra'),
     ],
 ];
