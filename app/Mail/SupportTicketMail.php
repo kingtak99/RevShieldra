@@ -96,15 +96,7 @@ class SupportTicketMail extends Mailable
         }
 
         try {
-            $response = Http::withHeaders([
-                'api-key' => env('BREVO_API_KEY'),
-                'Accept' => 'application/json',
-            ])->get('https://api.brevo.com/v3/account');
-
-            dd([
-                'status' => $response->status(),
-                'body' => $response->body(),
-            ]);
+         
             $response = Http::withHeaders([
                 'api-key' => $apiKey,
                 'Accept' => 'application/json',
