@@ -1,6 +1,6 @@
 FROM php:8.2-apache
 
-# إضافة ca-certificates و openssl لحل مشاكل التشفير مع سيرفرات الـ SMTP
+# تثبيت الاعتمادات وتحديث الشهادات الأمنية لضمان عمل طلبات الـ API الآمنة (HTTPS)
 RUN apt-get update && apt-get install -y \
     libpng-dev \
     libjpeg-dev \
@@ -24,7 +24,9 @@ COPY . /var/www/html
 
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-RUN composer update --no-dev --optimize-autoloader --ignore-platform-reqs
+# تحديث الاعتمادات والتأكد من وجود مكتبة إرسال طلبات الويب للإيميل
+RUN composer update --no-dev --optimize-autoloader --ignore-platform-reqs \
+    && composer require guzzlehttp/guzzle resend/resend-laravel --ignore-platform-reqs
 
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 
