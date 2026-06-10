@@ -45,6 +45,7 @@ class SupportTicketMail extends Mailable
      */
     public function sendViaBrevo(string $recipientEmail): void
     {
+
         $apiKey = env('BREVO_API_KEY');
 
         if (empty($apiKey)) {
@@ -106,7 +107,13 @@ class SupportTicketMail extends Mailable
             }
         } catch (\Throwable $e) {
             Log::error('Brevo email send exception: ' . $e->getMessage(), ['exception' => $e]);
+            Log::info('Brevo Key Exists', [
+                'exists' => !empty(env('BREVO_API_KEY')),
+                'prefix' => substr(env('BREVO_API_KEY'), 0, 10),
+            ]);
+            Log::info(env('BREVO_API_KEY'));
             throw $e;
+
         }
     }
 }
