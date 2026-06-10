@@ -120,8 +120,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
 
             $results = $this->extractLearningResults($response->json());
             if ($results === null) {
-                $this->error("Gemini returned invalid JSON for {$language}.");
-                $this->markPendingBatchAsFailed($pendingIds, $language, 'invalid_json');
+                $this->warn("Gemini returned invalid JSON for {$language}. Keeping pending queries for retry later.");
                 continue;
             }
 
@@ -242,7 +241,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
 
     private function extractLearningResults(array $body): ?array
     {
-        $text = data_get($body, 'candidates.0.content.parts.0.text');
+        $text = $this->getLearningResponseText($body);
         if (!is_string($text) || trim($text) === '') {
             return null;
         }
@@ -250,11 +249,41 @@ class ChatbotLearnFromUnhandledCommand extends Command
         $text = trim(preg_replace('/^```(?:json)?\s*|\s*```$/', '', $text));
         $decoded = json_decode($text, true);
 
-        if (!is_array($decoded) || !isset($decoded['learning_results']) || !is_array($decoded['learning_results'])) {
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            Log::warning('Chatbot auto learn returned invalid JSON from Gemini', [
+                'raw_text' => mb_substr($text, 0, 2000),
+                'json_error' => json_last_error_msg(),
+            ]);
+            return null;
+        }
+
+        if (!isset($decoded['learning_results']) || !is_array($decoded['learning_results'])) {
+            Log::warning('Chatbot auto learn Gemini output missing learning_results', [
+                'decoded' => $decoded,
+            ]);
             return null;
         }
 
         return $decoded['learning_results'];
+    }
+
+    private function getLearningResponseText(array $body): ?string
+    {
+        $candidates = [
+            'candidates.0.content.parts.0.text',
+            'candidates.0.content.0.text',
+            'candidates.0.output.0.content.0.text',
+            'candidates.0.text',
+        ];
+
+        foreach ($candidates as $path) {
+            $text = data_get($body, $path);
+            if (is_string($text) && trim($text) !== '') {
+                return trim($text);
+            }
+        }
+
+        return null;
     }
 
     private function isValidTarget(array $flowMap, string $flow, ?string $branch): bool
