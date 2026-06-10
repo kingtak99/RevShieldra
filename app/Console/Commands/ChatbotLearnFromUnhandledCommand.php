@@ -57,7 +57,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
                 $attempt++;
 
                 try {
-                    $response = Http::timeout(30)
+                    $response = Http::timeout(60)
                         ->withHeaders(['Content-Type' => 'application/json'])
                         ->post("https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}", [
                             'contents' => [
@@ -79,7 +79,7 @@ class ChatbotLearnFromUnhandledCommand extends Command
                         break;
                     }
 
-                    $wait = min(5 * $attempt, 30);
+                    $wait = $this->calculateBackoffDelay($attempt);
                     $this->warn("Gemini request exception on attempt {$attempt}/{$maxAttempts}. Retrying in {$wait}s...");
                     sleep($wait);
                     continue;
@@ -89,8 +89,8 @@ class ChatbotLearnFromUnhandledCommand extends Command
                     break;
                 }
 
-                if (in_array($response->status(), [429, 503], true) && $attempt < $maxAttempts) {
-                    $delay = $this->extractRetryDelaySeconds($response->json()) ?? min(5 * $attempt, 30);
+                if (in_array($response->status(), [429, 503, 504], true) && $attempt < $maxAttempts) {
+                    $delay = $this->extractRetryDelaySeconds($response->json()) ?? $this->calculateBackoffDelay($attempt);
                     $this->warn("Gemini returned HTTP {$response->status()} for {$language}. Retrying in {$delay}s ({$attempt}/{$maxAttempts})...");
                     sleep($delay);
                     continue;
@@ -364,5 +364,10 @@ class ChatbotLearnFromUnhandledCommand extends Command
         }
 
         return in_array($response->status(), [429, 503, 504], true);
+    }
+
+    private function calculateBackoffDelay(int $attempt): int
+    {
+        return (int) min(10 * (2 ** ($attempt - 1)), 120);
     }
 }
